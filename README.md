@@ -1,10 +1,11 @@
 # Edge Agent Bridge
 
-[![PyPI version](https://img.shields.io/pypi/v/edge-agent-bridge.svg?color=blue)](https://pypi.org/project/edge-agent-bridge/)
-[![Python versions](https://img.shields.io/pypi/pyversions/edge-agent-bridge.svg)](https://pypi.org/project/edge-agent-bridge/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ff69b4.svg)](https://github.com/sponsors/shanewas)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-yellow.svg)](https://buymeacoffee.com/shanewas)
+[![PyPI - Version](https://img.shields.io/pypi/v/edge-agent-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/edge-agent-bridge/)
+[![GitHub Release](https://img.shields.io/github/v/release/shanewas/edge-agent-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/edge-agent-bridge/releases/latest)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/edge-agent-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/edge-agent-bridge/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/shanewas/edge-agent-bridge/blob/main/LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/shanewas)
+[![Buy Me A Coffee](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/shanewas)
 
 Control your real, active Microsoft Edge tabs directly from Python scripts and CLI commands.
 
