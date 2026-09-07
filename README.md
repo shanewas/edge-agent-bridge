@@ -1,4 +1,4 @@
-# Edge Agent Bridge
+# Agent Browser Bridge (ABB)
 
 [![PyPI - Version](https://img.shields.io/pypi/v/edge-agent-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/edge-agent-bridge/)
 [![GitHub Release](https://img.shields.io/github/v/release/shanewas/edge-agent-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/edge-agent-bridge/releases/latest)
@@ -7,9 +7,9 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/shanewas)
 [![Buy Me A Coffee](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/shanewas)
 
-Control your real, active Microsoft Edge tabs directly from Python scripts and CLI commands.
+Universal real-time AI agent control for Microsoft Edge and Chromium browsers directly from Python scripts and CLI commands.
 
-Standard browser automation frameworks like Playwright, Puppeteer, and Selenium always spin up clean temporary profiles that don't have your logged-in cookies, which ends up triggering bot checks or breaking on company SSO portals. Edge Agent Bridge skips that headache by attaching straight to your running browser window, so you don't lose your active session, enterprise VPN, or saved logins. It dispatches hardware-level inputs through Chrome DevTools Protocol over a local RFC 6455 WebSocket.
+Standard browser automation frameworks like Playwright, Puppeteer, and Selenium always spin up clean temporary profiles that lack your logged-in cookies, triggering bot checks or breaking on corporate SSO portals. **Agent Browser Bridge** connects any AI coding agent (Claude, Antigravity, OpenAI Codex, OpenCode, AutoGPT, custom agents) straight to your running browser window, preserving active sessions, enterprise VPNs, and saved credentials. It dispatches hardware-level inputs through Chrome DevTools Protocol over a local RFC 6455 WebSocket.
 
 ---
 

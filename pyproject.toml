@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edge-agent-bridge"
-version = "1.2.0"
-description = "Real-time AI agent bridge for Microsoft Edge using active browser sessions, CDP hardware events, and WebSockets."
+version = "1.2.1"
+description = "Universal AI agent bridge for Microsoft Edge and Chromium browsers using active sessions, CDP hardware events, and WebSockets."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -15,7 +15,7 @@ maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
 requires-python = ">=3.8"
-keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time"]
+keywords = ["agent-browser-bridge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "edge", "chromium", "real-time"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -39,6 +39,8 @@ Issues = "https://github.com/shanewas/edge-agent-bridge/issues"
 Funding = "https://github.com/sponsors/shanewas"
 
 [project.scripts]
+agent-browser-bridge = "edge_agent_bridge.cli:main"
+abb = "edge_agent_bridge.cli:main"
 edge-bridge = "edge_agent_bridge.cli:main"
 edge = "edge_agent_bridge.cli:main"
 

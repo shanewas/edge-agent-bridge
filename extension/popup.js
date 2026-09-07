@@ -21,30 +21,41 @@ async function updateUI() {
   chrome.storage.local.get(["lastLog"], (data) => {
     const badge = document.getElementById("statusBadge");
     const isOnline = directConnected;
-    if (isOnline) {
-      badge.className = "badge connected";
-      badge.innerText = "Connected";
-    } else {
-      badge.className = "badge disconnected";
-      badge.innerText = "Offline";
+    if (badge) {
+      if (isOnline) {
+        badge.className = "badge connected";
+        badge.innerText = "Connected";
+      } else {
+        badge.className = "badge disconnected";
+        badge.innerText = "Offline";
+      }
     }
 
-    if (data.lastLog) {
-      document.getElementById("logBox").innerText = data.lastLog;
-    } else if (directConnected) {
-      document.getElementById("logBox").innerText = "Bridge online on 127.0.0.1:18999";
+    const logBox = document.getElementById("logBox");
+    if (logBox) {
+      if (data.lastLog) {
+        logBox.innerText = data.lastLog;
+      } else if (directConnected) {
+        logBox.innerText = "Bridge online on 127.0.0.1:18999";
+      }
     }
   });
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (tab) {
-      document.getElementById("tabInfo").innerText = `${tab.title || "Tab"}\n(${tab.url || ""})`;
-    } else {
-      document.getElementById("tabInfo").innerText = "No active tab";
+    const tabInfo = document.getElementById("tabInfo");
+    if (tabInfo) {
+      if (tab) {
+        tabInfo.innerText = `${tab.title || "Tab"}\n(${tab.url || ""})`;
+      } else {
+        tabInfo.innerText = "No active tab";
+      }
     }
   } catch (e) {
-    document.getElementById("tabInfo").innerText = "Tab info unavailable";
+    const tabInfo = document.getElementById("tabInfo");
+    if (tabInfo) {
+      tabInfo.innerText = "Tab info unavailable";
+    }
   }
 }
 

@@ -1,14 +1,14 @@
-// Antigravity Edge Bridge - Background Service Worker
+// Agent Browser Bridge - Background Service Worker
 // Handles all commands and acts as the singleton bridge client.
 const BRIDGE_URL = "http://127.0.0.1:18999";
 let lastLog = "Initializing...";
 let isPolling = false;
 
-console.log("[Antigravity Bridge] Service worker loaded");
+console.log("[Agent Browser Bridge] Service worker loaded");
 
 function log(msg) {
   lastLog = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  console.log(`[Antigravity Bridge] ${msg}`);
+  console.log(`[Agent Browser Bridge] ${msg}`);
   try {
     chrome.storage.local.set({ lastLog });
   } catch (e) {}
@@ -34,10 +34,18 @@ async function getTargetTab(tabId) {
       return null;
     }
   }
+  const isScriptable = (t) => t && t.url && !t.url.startsWith("edge://") && !t.url.startsWith("chrome://") && !t.url.includes("microsoftedge.microsoft.com/addons");
+
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab) return tab;
-  const [anyTab] = await chrome.tabs.query({ active: true });
-  return anyTab || null;
+  if (isScriptable(tab)) return tab;
+
+  const activeTabs = await chrome.tabs.query({ active: true });
+  const scriptableActive = activeTabs.find(isScriptable);
+  if (scriptableActive) return scriptableActive;
+
+  const allTabs = await chrome.tabs.query({});
+  const scriptableAny = allTabs.find(isScriptable);
+  return scriptableAny || tab || activeTabs[0] || null;
 }
 
 function waitForTabLoad(tabId, timeoutMs = 15000) {
@@ -1280,6 +1288,23 @@ async function handleCommand(cmd) {
       case "eval": {
         const tab = await getTargetTab(p.tabId);
         if (!tab) return { success: false, error: "No active tab" };
+        const hasDbg = await ensureDebugger(tab.id);
+        if (hasDbg) {
+          try {
+            const res = await cdpSend(tab.id, "Runtime.evaluate", {
+              expression: p.code,
+              returnByValue: true,
+              awaitPromise: true
+            });
+            if (res.exceptionDetails) {
+              const desc = res.exceptionDetails.exception ? (res.exceptionDetails.exception.description || res.exceptionDetails.text) : res.exceptionDetails.text;
+              return { success: false, error: desc };
+            }
+            return { success: true, result: res.result ? res.result.value : undefined };
+          } catch (cdpErr) {
+            log(`CDP eval failed (${cdpErr.message}), falling back to execInTab`);
+          }
+        }
         return await execInTab(tab.id, PageActions.evalCode, [p.code], "MAIN");
       }
 
