@@ -9,7 +9,7 @@ description = "Real-time AI agent bridge for Microsoft Edge using active browser
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Shanewas Ahmed", email = "shanewas.nabil@gmail.com" }
+    { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
 requires-python = ">=3.8"
 keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time"]

@@ -1240,10 +1240,19 @@ async function handleCommand(cmd) {
 
 let bridgeWs = null;
 let wsReconnectTimer = null;
+let wsBackoffMs = 1000;
+const MAX_BACKOFF_MS = 30000;
 
-function connectWebSocket() {
+function connectWebSocket(force = false) {
   if (bridgeWs && (bridgeWs.readyState === WebSocket.CONNECTING || bridgeWs.readyState === WebSocket.OPEN)) {
     return;
+  }
+  if (wsReconnectTimer && !force) {
+    return;
+  }
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
   }
   try {
     const ws = new WebSocket("ws://127.0.0.1:18999/ws");
@@ -1251,6 +1260,7 @@ function connectWebSocket() {
 
     ws.onopen = () => {
       log("WebSocket real-time channel connected to bridge daemon");
+      wsBackoffMs = 1000;
       if (wsReconnectTimer) {
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = null;
@@ -1293,10 +1303,12 @@ function connectWebSocket() {
 
 function scheduleWsReconnect() {
   if (!wsReconnectTimer) {
+    const delay = wsBackoffMs;
+    wsBackoffMs = Math.min(Math.round(wsBackoffMs * 1.5), MAX_BACKOFF_MS);
     wsReconnectTimer = setTimeout(() => {
       wsReconnectTimer = null;
-      connectWebSocket();
-    }, 1200);
+      connectWebSocket(true);
+    }, delay);
   }
 }
 
@@ -1333,10 +1345,10 @@ async function pollLoop() {
       } else if (response.status === 204) {
         // Queue empty, loop immediately
       } else {
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, Math.min(wsBackoffMs, 5000)));
       }
     } catch (err) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, Math.min(Math.max(wsBackoffMs, 3000), 10000)));
     }
   }
 }

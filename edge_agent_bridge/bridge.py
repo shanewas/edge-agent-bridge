@@ -248,6 +248,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
             self._mark_seen()
             self.close_connection = True
+            self.connection.settimeout(None)
             self._run_ws_loop(ws_conn)
             return
 
