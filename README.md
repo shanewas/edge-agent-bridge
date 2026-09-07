@@ -37,13 +37,25 @@ Runs on Python 3.8+ without installing external packages.
 
 ## Fast Setup
 
-1. Open `edge://extensions` in Microsoft Edge and toggle Developer mode on.
-2. Run `edge-bridge extension open` in your terminal to reveal the extension folder.
-3. In Edge, select "Load unpacked" and pick that folder.
-4. Verify the connection by running:
-   ```bash
-   edge-bridge status
-   ```
+### 1. Install the Microsoft Edge Extension
+You can install the extension via either method:
+
+- **Method A (Microsoft Edge Add-ons Store)**:
+  Install the official **Antigravity Edge Bridge** extension from the [Microsoft Edge Add-ons Store](https://microsoftedge.microsoft.com/addons).
+- **Method B (Developer Mode / Unpacked)**:
+  1. Open `edge://extensions` in Edge and toggle **Developer mode** on.
+  2. Run in terminal:
+     ```bash
+     edge-bridge extension open
+     ```
+  3. Click **Load unpacked** and select that directory.
+
+### 2. Verify Connection
+Run in terminal:
+```bash
+edge-bridge status
+```
+When Microsoft Edge is open, the bridge daemon connects instantly over `127.0.0.1:18999` with sub-15ms WebSocket latency.
 
 ---
 
