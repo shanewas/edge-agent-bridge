@@ -158,11 +158,14 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _run_ws_loop(self, ws_conn: WebSocketConnection):
         global active_extension_ws
+        msg_buffer = bytearray()
+        msg_opcode = None
         try:
             while not ws_conn.closed:
                 hdr = self._read_exact(2)
                 if not hdr:
                     break
+                fin = (hdr[0] >> 7) & 1
                 opcode = hdr[0] & 0x0F
                 has_mask = (hdr[1] >> 7) & 1
                 length = hdr[1] & 0x7F
@@ -187,23 +190,35 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 if payload is None:
                     break
 
-                if has_mask and mask:
-                    payload = bytes([b ^ mask[i % 4] for i, b in enumerate(payload)])
+                if has_mask and mask and payload:
+                    m = mask * (len(payload) // 4) + mask[:len(payload) % 4]
+                    payload = (int.from_bytes(payload, "big") ^ int.from_bytes(m, "big")).to_bytes(len(payload), "big")
 
                 self._mark_seen()
 
-                if opcode == 1:  # Text frame
-                    try:
-                        data = json.loads(payload.decode("utf-8"))
-                        self._handle_result_payload(data)
-                    except Exception:
-                        pass
-                elif opcode == 9:  # Ping
+                if opcode == 9:  # Ping
                     ws_conn.send_pong(payload)
                 elif opcode == 10:  # Pong
                     pass
                 elif opcode == 8:  # Close
                     break
+                else:
+                    # Data frames (Text=1, Binary=2, Continuation=0)
+                    if opcode != 0:
+                        msg_opcode = opcode
+                        msg_buffer = bytearray(payload)
+                    else:
+                        msg_buffer.extend(payload)
+
+                    if fin:
+                        if msg_opcode == 1:  # Text frame
+                            try:
+                                data = json.loads(msg_buffer.decode("utf-8"))
+                                self._handle_result_payload(data)
+                            except Exception:
+                                pass
+                        msg_buffer = bytearray()
+                        msg_opcode = None
         finally:
             ws_conn.close()
             with ws_lock:
