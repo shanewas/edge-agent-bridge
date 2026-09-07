@@ -30,3 +30,7 @@ Desktop.ini
 .env
 *.token
 *.pat
+
+# agent scratch
+.superpowers/
+graphify-out/

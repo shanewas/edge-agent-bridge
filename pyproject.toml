@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edge-agent-bridge"
-version = "1.1.2"
+dynamic = ["version"]
 description = "Real-time AI agent bridge for Microsoft Edge using active browser sessions, CDP hardware events, and WebSockets."
 readme = "README.md"
 license = "MIT"
@@ -14,19 +14,19 @@ authors = [
 maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
-requires-python = ">=3.8"
-keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time"]
+requires-python = ">=3.10"
+keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Testing",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
@@ -53,3 +53,10 @@ edge_agent_bridge = [
     "extension/*.json",
     "extension/icons/*.png"
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "edge_agent_bridge.__version__"}
+
+[tool.pytest.ini_options]
+markers = ["e2e: needs a running Edge with the extension"]
+testpaths = ["tests"]

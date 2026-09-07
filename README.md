@@ -53,7 +53,7 @@ Runs on Python 3.8+ without installing external packages.
 You can install the extension via either method:
 
 - **Method A (Microsoft Edge Add-ons Store)**:
-  Install the official **Antigravity Edge Bridge** extension from the [Microsoft Edge Add-ons Store](https://microsoftedge.microsoft.com/addons).
+  Install the official **Edge Agent Bridge** extension from the [Microsoft Edge Add-ons Store](https://microsoftedge.microsoft.com/addons).
 - **Method B (Developer Mode / Unpacked)**:
   1. Open `edge://extensions` in Edge and toggle **Developer mode** on.
   2. Run in terminal:

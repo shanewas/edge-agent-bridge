@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Frames fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    iframe { display: block; width: 420px; height: 120px; border: 4px solid #999; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>Frames fixture</h1>
+  <iframe id="same" title="same-origin" src="/inner.html?tag=same"></iframe>
+  <iframe id="cross" title="cross-origin"></iframe>
+  <div id="host"></div>
+  <iframe id="sandboxed" title="sandboxed" sandbox src="/inner.html?tag=sandboxed"></iframe>
+  <script>
+    window.__hits = [];
+    window.__notes = [];
+    window.addEventListener("message", function (e) {
+      if (!e.data) return;
+      if (e.data.hit) window.__hits.push([e.data.hit, e.data.trusted]);
+      if (e.data.note) window.__notes.push(e.data.note);
+    });
+    var cross = new URLSearchParams(location.search).get("cross");
+    if (cross) document.getElementById("cross").src = cross + "/inner.html?tag=cross";
+    var shadow = document.getElementById("host").attachShadow({ mode: "open" });
+    var f = document.createElement("iframe");
+    f.title = "shadow";
+    f.src = "/inner.html?tag=shadow";
+    shadow.appendChild(f);
+  </script>
+</body>
+</html>

@@ -1,0 +1,724 @@
+// Edge Agent Bridge - command router. dispatch() resolves the tab and serializes per tab;
+// execute() is the action switch and is re-entrant (batch calls it directly).
+import { ensureDebugger, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
+import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
+import * as page from "./page.js";
+
+// Attach the debugger and start event capture (console, network, dialogs) for the tab.
+async function attach(tabId) {
+  const ok = await ensureDebugger(tabId);
+  if (ok) await enableEvents(tabId);
+  return ok;
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function log(msg) {
+  console.log(`[Edge Bridge] ${msg}`);
+  try { chrome.storage.local.set({ lastLog: `[${new Date().toLocaleTimeString()}] ${msg}` }); } catch (e) {}
+}
+
+function fail(code, error, extra = {}) {
+  return { success: false, code, error, ...extra };
+}
+
+export async function getTargetTab(tabId) {
+  if (tabId !== undefined && tabId !== null && tabId !== "") {
+    try {
+      return await chrome.tabs.get(Number(tabId));
+    } catch (e) {
+      return null;
+    }
+  }
+  const isScriptable = (t) => t && t.url && !t.url.startsWith("edge://") && !t.url.startsWith("chrome://") && !t.url.includes("microsoftedge.microsoft.com/addons");
+
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (isScriptable(tab)) return tab;
+
+  const activeTabs = await chrome.tabs.query({ active: true });
+  const scriptableActive = activeTabs.find(isScriptable);
+  if (scriptableActive) return scriptableActive;
+
+  const allTabs = await chrome.tabs.query({});
+  const scriptableAny = allTabs.find(isScriptable);
+  return scriptableAny || tab || activeTabs[0] || null;
+}
+
+function tabInfo(tab) {
+  return { id: tab.id, title: tab.title, url: tab.url };
+}
+
+// Resolve when the tab reports status "complete". Register before triggering a navigation
+// (nav, back, reload) so the transition is not missed; for a freshly created tab pass
+// checkNow so a page that already finished loading does not make us wait for the timeout.
+function waitForTabLoad(tabId, timeoutMs = 15000, checkNow = false) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") finish(true);
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    if (checkNow) {
+      chrome.tabs.get(tabId).then(t => { if (t && t.status === "complete") finish(true); }).catch(() => finish(false));
+    }
+  });
+}
+
+function injectionTarget(tabId, frameId) {
+  return (frameId === undefined || frameId === null) ? { tabId } : { tabId, frameIds: [Number(frameId)] };
+}
+
+// page-lib.js is idempotent; page functions answer code "lib_missing" until it is present.
+async function injectLib(tabId, frameId) {
+  await chrome.scripting.executeScript({ target: injectionTarget(tabId, frameId), files: ["page-lib.js"] });
+}
+
+export async function execInTab(tabId, func, args = [], world = "ISOLATED", frameId = undefined) {
+  const target = injectionTarget(tabId, frameId);
+  const cleanArgs = (args || []).map(a => (a === undefined ? null : a));
+  const run = async () => {
+    const results = await chrome.scripting.executeScript({ target, func, args: cleanArgs, world });
+    if (results && results[0]) return results[0].result;
+    return fail("inject_failed", "Script injected but returned no result");
+  };
+  try {
+    let result = await run();
+    if (result && result.code === "lib_missing") {
+      await injectLib(tabId, frameId);
+      result = await run();
+    }
+    return result;
+  } catch (err) {
+    return fail("inject_failed", err.message);
+  }
+}
+
+// Refs carry their frame: "f31e2" lives in frame 31, "e2" in the main frame.
+function frameOfRef(target) {
+  const m = typeof target === "string" ? target.match(/^f(\d+)e\d+$/) : null;
+  return m ? Number(m[1]) : undefined;
+}
+
+async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {}) {
+  if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
+    return { found: true, x: Number(target.x), y: Number(target.y) };
+  }
+  const resolveOpts = { highlight: opts.highlight !== false };
+  const frameId = frameOfRef(target);
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await execInTab(tabId, page.pageResolve, [target, resolveOpts], "ISOLATED", frameId);
+    if (last && last.found) {
+      return last;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return { found: false, code: (last && last.code) || "target_not_found", error: `Target not found within ${timeoutMs}ms: "${target}"` };
+}
+
+function hasCoords(p) {
+  return p.x !== undefined && p.y !== undefined && p.x !== null && p.y !== null;
+}
+
+// Snapshot the main frame and (unless frames:false) every reachable subframe, then nest each
+// subframe's lines under the iframe line its handshake path points at.
+async function snapshotTab(tabId, mode, withFrames, maxNodes = 400) {
+  const gen = Date.now();
+  const main = await execInTab(tabId, page.pageSnapshot, [{ mode, gen, frameLabel: "", maxNodes }]);
+  if (!main || main.success === false) return main || fail("inject_failed", "Snapshot returned nothing");
+  main.frameId = 0;
+  let subs = [];
+  if (withFrames && main.iframes && main.iframes.length > 0) {
+    let probe = [];
+    try {
+      probe = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => window === window.top });
+    } catch (e) {
+      probe = [];
+    }
+    const frameIds = probe.filter(r => r && r.result === false).map(r => r.frameId);
+    const results = await Promise.all(frameIds.map(fid =>
+      execInTab(tabId, page.pageSnapshot, [{ mode, gen, frameLabel: `f${fid}`, maxNodes }], "ISOLATED", fid)
+        .then(r => (r && r.success ? { ...r, frameId: fid } : null))
+        .catch(() => null)));
+    subs = results.filter(Boolean);
+  }
+
+  const samePath = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const placed = new Set();
+  function compose(snap) {
+    const lines = snap.lines.slice();
+    if (!withFrames) return lines;
+    const marks = snap.iframes.slice().sort((a, b) => b.line - a.line);
+    for (const m of marks) {
+      const childPath = snap.path.concat(m.index);
+      const child = subs.find(s => s.placed && samePath(s.path, childPath));
+      if (!child) {
+        lines[m.line] += " [unreachable]";
+        continue;
+      }
+      placed.add(child.frameId);
+      lines[m.line] += ` [f${child.frameId}]`;
+      const sub = compose(child).map(l => "  ".repeat(m.depth + 1) + l);
+      lines.splice(m.line + 1, 0, ...sub);
+    }
+    return lines;
+  }
+  const lines = compose(main);
+  for (const s of subs) {
+    if (placed.has(s.frameId)) continue;
+    lines.push(`- iframe "${s.title || s.url}" [f${s.frameId}] (position unknown)`);
+    lines.push(...s.lines.map(l => "  " + l));
+  }
+  const nodes = main.nodes.concat(...subs.map(s => s.nodes));
+  const refs = main.refs + subs.reduce((n, s) => n + s.refs, 0);
+  return { success: true, text: [`page "${main.title}" url=${main.url}`, ...lines].join("\n"), refs, nodes, url: main.url, title: main.title };
+}
+
+// Resolve coordinates for an input action from x/y or a target expression.
+async function locate(tabId, p, verb) {
+  if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
+  const target = p.ref || p.target || p.selector || p.text;
+  if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
+  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+  if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
+  return { ok: true, x: r.x, y: r.y, info: r };
+}
+
+function showCursor(tabId, x, y, click, p) {
+  if (p.highlight === false) return;
+  execInTab(tabId, page.pageCursor, [x, y, Boolean(click)]).catch(() => {});
+}
+
+export async function execute(cmd) {
+  const action = cmd.action;
+  const p = cmd.params || {};
+  const tabId = p.tabId;
+  log(`Executing: ${action} (${JSON.stringify(p)})`);
+
+  try {
+    switch (action) {
+      case "ping":
+        return { success: true, message: "pong", version: chrome.runtime.getManifest().version };
+
+      case "reload_extension":
+        setTimeout(() => { chrome.runtime.reload(); }, 100);
+        return { success: true, message: "Extension reloading..." };
+
+      case "status": {
+        return { success: true, version: chrome.runtime.getManifest().version, id: chrome.runtime.id };
+      }
+
+      case "get_active_tab":
+      case "tab": {
+        const tab = await getTargetTab(tabId);
+        if (!tab) return fail("no_active_tab", "No active tab found");
+        return { success: true, tab: { ...tabInfo(tab), status: tab.status } };
+      }
+
+      case "list_tabs":
+      case "tabs": {
+        const tabs = await chrome.tabs.query({});
+        return {
+          success: true,
+          tabs: tabs.map(t => ({ id: t.id, title: t.title, url: t.url, active: t.active, windowId: t.windowId, groupId: t.groupId }))
+        };
+      }
+
+      case "switch_tab":
+      case "tab_switch": {
+        if (p.tabId === undefined || p.tabId === null) return fail("tab_required", "tab_switch requires tabId");
+        let tab;
+        try {
+          tab = await chrome.tabs.update(Number(p.tabId), { active: true });
+        } catch (e) {
+          return fail("tab_not_found", `Tab ${p.tabId} no longer exists`);
+        }
+        if (tab && tab.windowId) {
+          try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
+        }
+        return { success: true, tabId: tab.id, tab: tabInfo(tab) };
+      }
+
+      case "close_tab":
+      case "tab_close": {
+        if (p.tabId === undefined || p.tabId === null || p.tabId === "") {
+          return fail("tab_required", "tab_close requires an explicit tabId");
+        }
+        const tab = await getTargetTab(p.tabId);
+        if (!tab) return fail("tab_not_found", `Tab ${p.tabId} no longer exists`);
+        await chrome.tabs.remove(tab.id);
+        return { success: true, closedTabId: tab.id, tab: tabInfo(tab) };
+      }
+
+      case "nav": {
+        const url = p.url;
+        if (!url) return fail("bad_params", "nav requires url");
+        let tab = await getTargetTab(tabId);
+        if (tab) await attach(tab.id);
+        if (!tab) {
+          tab = await chrome.tabs.create({ url });
+          const loaded = await waitForTabLoad(tab.id, 15000, true);
+          const created = await chrome.tabs.get(tab.id);
+          if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: created.url, tab: tabInfo(created) });
+          return { success: true, title: created.title, url: created.url, tab: tabInfo(created) };
+        } else {
+          const pending = waitForTabLoad(tab.id);
+          await chrome.tabs.update(tab.id, { url });
+          if (p.wait === "none") {
+            const t0 = await chrome.tabs.get(tab.id);
+            return { success: true, title: t0.title, url: t0.url, tab: tabInfo(t0) };
+          }
+          const ok = await pending;
+          const t = await chrome.tabs.get(tab.id);
+          if (!ok) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: t.url, tab: tabInfo(t) });
+          return { success: true, title: t.title, url: t.url, tab: tabInfo(t) };
+        }
+        const loaded = await waitForTabLoad(tab.id);
+        const updatedTab = await chrome.tabs.get(tab.id);
+        if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: updatedTab.url, tab: tabInfo(updatedTab) });
+        return { success: true, title: updatedTab.title, url: updatedTab.url, tab: tabInfo(updatedTab) };
+      }
+
+      case "tab_new": {
+        const url = p.url || "about:blank";
+        const active = p.active !== false;
+        let tab;
+        if (p.window) {
+          const win = await chrome.windows.create({ url, focused: active });
+          tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
+        } else {
+          tab = await chrome.tabs.create({ url, active });
+        }
+        let group = null;
+        if (p.group) {
+          const name = typeof p.group === "string" ? p.group : "Agent";
+          try {
+            if (!chrome.tabs.group || !chrome.tabGroups) throw new Error("tab groups API unavailable");
+            const existing = await chrome.tabGroups.query({ title: name, windowId: tab.windowId });
+            let groupId;
+            if (existing.length) {
+              groupId = await chrome.tabs.group({ tabIds: tab.id, groupId: existing[0].id });
+            } else {
+              groupId = await chrome.tabs.group({ tabIds: tab.id });
+              await chrome.tabGroups.update(groupId, { title: name, color: "blue" });
+            }
+            group = { id: groupId, title: name };
+          } catch (e) {
+            group = { code: "group_unsupported", error: e.message };
+          }
+        }
+        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, 15000, true);
+        const t = await chrome.tabs.get(tab.id);
+        return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
+      }
+
+      case "back":
+      case "forward":
+      case "reload": {
+        const pending = p.wait === "none" ? null : waitForTabLoad(tabId);
+        try {
+          if (action === "reload") {
+            await chrome.tabs.reload(tabId);
+          } else {
+            // chrome.tabs.goBack refuses entries Chromium marked skippable (navigations it
+            // started without a user gesture), so address the history entry directly.
+            const hasDbg = await attach(tabId);
+            if (hasDbg) {
+              const hist = await cdpSend(tabId, "Page.getNavigationHistory", {});
+              const idx = hist.currentIndex + (action === "back" ? -1 : 1);
+              const entry = hist.entries[idx];
+              if (!entry) return fail("no_history", `No ${action === "back" ? "previous" : "next"} page in history`);
+              await cdpSend(tabId, "Page.navigateToHistoryEntry", { entryId: entry.id });
+            } else if (action === "back") {
+              await chrome.tabs.goBack(tabId);
+            } else {
+              await chrome.tabs.goForward(tabId);
+            }
+          }
+        } catch (e) {
+          return fail("no_history", e.message);
+        }
+        if (pending) await pending;
+        const t = await chrome.tabs.get(tabId);
+        return { success: true, url: t.url, title: t.title, tab: tabInfo(t) };
+      }
+
+      case "select": {
+        const loc = await locate(tabId, p, "select");
+        if (!loc.ok) return loc.result;
+        const res = await execInTab(tabId, page.pageSelect, [p.ref || null, loc.x, loc.y, p.value, p.label], "ISOLATED", frameOfRef(p.ref));
+        return res && res.success ? { ...res, ...loc.info, x: loc.x, y: loc.y } : res;
+      }
+
+      case "upload": {
+        const files = Array.isArray(p.files) ? p.files.map(String) : (p.file ? [String(p.file)] : []);
+        if (!files.length) return fail("bad_params", "upload requires files: [absolute paths]");
+        const relative = files.filter(f => !/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(f));
+        if (relative.length) return fail("bad_params", `upload needs absolute paths, got: ${relative.join(", ")}`);
+        const loc = await locate(tabId, p, "upload");
+        if (!loc.ok) return loc.result;
+        const mark = await execInTab(tabId, page.pageMarkUpload, [p.ref || null, loc.x, loc.y]);
+        if (!mark || mark.success === false) return mark || fail("no_file_input", "No file input found");
+        try {
+          const hasDbg = await attach(tabId);
+          if (!hasDbg) return fail("debugger_unavailable", "upload needs the debugger permission");
+          await setFileInputFiles(tabId, '[data-eab-upload="1"]', files);
+        } catch (e) {
+          return fail("upload_failed", e.message);
+        } finally {
+          execInTab(tabId, page.pageUnmarkUpload, []).catch(() => {});
+        }
+        return { success: true, files, inputId: mark.id, ...loc.info };
+      }
+
+      case "screenshot": {
+        const tab = await chrome.tabs.get(tabId);
+        const format = p.format === "png" ? "png" : "jpeg";
+        let clip = p.clip || null;
+        if (!clip && p.of) {
+          const r = await resolveTargetWithWait(tabId, p.of, p.timeout || 5000, { highlight: false });
+          if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${p.of}`);
+          clip = { x: r.x - r.width / 2, y: r.y - r.height / 2, width: r.width, height: r.height };
+        }
+        const hasDbg = await attach(tabId);
+        if (hasDbg) {
+          try {
+            const dataUrl = await captureScreenshot(tabId, { format, quality: p.quality, clip });
+            return { success: true, dataUrl, format, clip, tabId: tab.id, title: tab.title, url: tab.url };
+          } catch (e) {
+            log(`Page.captureScreenshot failed (${e.message}); activating tab for captureVisibleTab`);
+          }
+        }
+        const [prev] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+        if (!tab.active) {
+          await chrome.tabs.update(tab.id, { active: true });
+          await new Promise(r => setTimeout(r, 150));
+        }
+        const opts = format === "jpeg" ? { format, quality: Math.max(1, Math.min(100, Number(p.quality) || 80)) } : { format };
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, opts);
+        if (prev && prev.id !== tab.id) {
+          try { await chrome.tabs.update(prev.id, { active: true }); } catch (e) {}
+        }
+        return { success: true, dataUrl, format, clip: null, tabId: tab.id, title: tab.title, url: tab.url, activated: !tab.active };
+      }
+
+      case "click":
+      case "dblclick":
+      case "rightclick": {
+        const loc = await locate(tabId, p, action);
+        if (!loc.ok) {
+          if (action !== "rightclick" && (p.selector || p.text)) {
+            const fn = action === "click" ? page.pageClickElement : page.pageDblclickElement;
+            return await execInTab(tabId, fn, [p.selector, p.text]);
+          }
+          return loc.result;
+        }
+        const { x, y, info } = loc;
+        const hasDbg = await attach(tabId);
+        if (hasDbg) {
+          const button = action === "rightclick" ? "right" : (p.button || "left");
+          await nativeClick(tabId, x, y, button, 1);
+          if (action === "dblclick") {
+            await new Promise(res => setTimeout(res, 50));
+            await nativeClick(tabId, x, y, "left", 2);
+          }
+          showCursor(tabId, x, y, true, p);
+          return { success: true, x, y, native: true, ...info };
+        }
+        const fallback = action === "click" ? page.pageClickAt : (action === "dblclick" ? page.pageDblclickAt : page.pageRightClickAt);
+        return await execInTab(tabId, fallback, [x, y]);
+      }
+
+      case "move":
+      case "hover": {
+        const loc = await locate(tabId, p, "hover");
+        if (!loc.ok) return loc.result;
+        const { x, y, info } = loc;
+        const hasDbg = await attach(tabId);
+        if (hasDbg) {
+          await nativeMove(tabId, x, y);
+          showCursor(tabId, x, y, false, p);
+          if (p.duration) {
+            await new Promise(res => setTimeout(res, Number(p.duration)));
+          }
+          return { success: true, x, y, native: true, ...info };
+        }
+        return await execInTab(tabId, page.pageMoveAt, [x, y]);
+      }
+
+      case "drag": {
+        let fromX = p.fromX, fromY = p.fromY;
+        if (!hasCoords({ x: fromX, y: fromY })) {
+          const rFrom = await resolveTargetWithWait(tabId, p.from || p.source, p.timeout || 5000, { highlight: p.highlight });
+          if (!rFrom || !rFrom.found) return fail("target_not_found", `Drag source not found: ${p.from || p.source}`);
+          fromX = rFrom.x;
+          fromY = rFrom.y;
+        }
+        let toX = p.toX, toY = p.toY;
+        if (!hasCoords({ x: toX, y: toY })) {
+          const rTo = await resolveTargetWithWait(tabId, p.to || p.target, p.timeout || 5000, { highlight: p.highlight });
+          if (!rTo || !rTo.found) return fail("target_not_found", `Drag target not found: ${p.to || p.target}`);
+          toX = rTo.x;
+          toY = rTo.y;
+        }
+        const hasDbg = await attach(tabId);
+        if (!hasDbg) return fail("debugger_unavailable", "Native drag requires debugger permission");
+        const onStep = p.highlight === false ? null : (cx, cy) => execInTab(tabId, page.pageCursor, [cx, cy, false]).catch(() => {});
+        await nativeDrag(tabId, Number(fromX), Number(fromY), Number(toX), Number(toY), Number(p.steps || 12), onStep);
+        return { success: true, fromX: Number(fromX), fromY: Number(fromY), toX: Number(toX), toY: Number(toY), native: true };
+      }
+
+      case "interactive":
+      case "elements": {
+        const snap = await snapshotTab(tabId, "interactive", p.frames !== false, 0);
+        if (!snap.success) return snap;
+        let els = snap.nodes;
+        if (p.filter) {
+          const f = String(p.filter).toLowerCase();
+          els = els.filter(e => (e.name || "").toLowerCase().includes(f) || (e.id || "").toLowerCase().includes(f));
+        }
+        return { success: true, count: els.length, elements: els.map(e => ({ ...e, tag: e.role, text: e.name })) };
+      }
+
+      case "wait_for":
+      case "wait": {
+        const timeout = Number(p.timeout || 5000);
+        const start = Date.now();
+        const waited = () => Date.now() - start;
+        if (p.idle) {
+          await attach(tabId);
+          const idleMs = Number(p.idleMs || 500);
+          let quietSince = null;
+          while (waited() < timeout) {
+            if (inflightUrls(tabId).length === 0) {
+              if (quietSince === null) quietSince = Date.now();
+              if (Date.now() - quietSince >= idleMs) return { success: true, idle: true, waited: waited() };
+            } else {
+              quietSince = null;
+            }
+            await sleep(50);
+          }
+          return fail("timeout", `network not idle within ${timeout}ms`, { waited: waited(), inflight: inflightUrls(tabId) });
+        }
+        if (p.url) {
+          const pattern = String(p.url);
+          const rx = /^\/.*\/[a-z]*$/.test(pattern) ? new RegExp(pattern.slice(1, pattern.lastIndexOf("/")), pattern.slice(pattern.lastIndexOf("/") + 1)) : null;
+          while (waited() < timeout) {
+            const t = await chrome.tabs.get(tabId);
+            const url = t.url || "";
+            if (rx ? rx.test(url) : url.includes(pattern)) return { success: true, url, waited: waited() };
+            await sleep(100);
+          }
+          const t = await chrome.tabs.get(tabId);
+          return fail("timeout", `url did not match ${pattern} within ${timeout}ms`, { waited: waited(), url: t.url });
+        }
+        if (p.load) {
+          while (waited() < timeout) {
+            const t = await chrome.tabs.get(tabId);
+            if (t.status === "complete") {
+              const rs = await execInTab(tabId, () => document.readyState, []);
+              if (rs === "complete") return { success: true, waited: waited() };
+            }
+            await sleep(100);
+          }
+          return fail("timeout", `page did not finish loading within ${timeout}ms`, { waited: waited() });
+        }
+        const r = await resolveTargetWithWait(tabId, p.ref || p.target || p.selector || p.text, timeout, { highlight: false });
+        if (r && r.found) return { success: true, waited: waited(), ...r };
+        return fail(r ? r.code : "target_not_found", r ? r.error : "Target not found", { waited: waited() });
+      }
+
+      case "console": {
+        await attach(tabId);
+        return { success: true, entries: getConsole(tabId, p.clear === true) };
+      }
+
+      case "dialog": {
+        await attach(tabId);
+        const res = await setDialogPolicy(tabId, p.policy || "accept", p.promptText);
+        return { success: true, ...res };
+      }
+
+      case "type": {
+        const text = p.text !== undefined ? String(p.text) : "";
+        const target = p.ref || p.target || p.selector;
+        if (target) {
+          const loc = await locate(tabId, p, "type");
+          if (!loc.ok) return loc.result;
+          const hasDbg = await attach(tabId);
+          if (!hasDbg) return await execInTab(tabId, page.pageTypeText, [p.selector, text, false]);
+          await nativeClick(tabId, loc.x, loc.y, "left", 1);
+          showCursor(tabId, loc.x, loc.y, true, p);
+          await new Promise(res => setTimeout(res, 50));
+        } else {
+          const hasDbg = await attach(tabId);
+          if (!hasDbg) return await execInTab(tabId, page.pageTypeText, [null, text, false]);
+        }
+        await nativeType(tabId, text, p.delay === undefined ? 20 : Number(p.delay));
+        return { success: true, text, native: true, chars: Array.from(text).length };
+      }
+
+      case "fill": {
+        const target = p.ref || p.target || p.selector;
+        const text = p.text !== undefined ? String(p.text) : "";
+        let x = p.x, y = p.y, targetInfo = {};
+        if (!hasCoords(p) && target) {
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          if (r && r.found) {
+            x = r.x;
+            y = r.y;
+            targetInfo = r;
+          }
+        }
+        if (x !== undefined && y !== undefined && x !== null && y !== null) {
+          try {
+            const hasDbg = await attach(tabId);
+            if (hasDbg) {
+              await nativeClick(tabId, Number(x), Number(y), "left", 1);
+              showCursor(tabId, Number(x), Number(y), true, p);
+              await new Promise(res => setTimeout(res, 50));
+              const prep = await execInTab(tabId, page.pageFillPrepare, [Number(x), Number(y), p.clear !== false]);
+              if (prep && prep.success === false) return prep;
+              await cdpSend(tabId, "Input.insertText", { text });
+              await execInTab(tabId, page.pageFillCommit, [Number(x), Number(y), text]);
+              return { success: true, text, native: true, ...targetInfo };
+            }
+          } catch (e) {
+            log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
+          }
+        }
+        return await execInTab(tabId, page.pageTypeText, [p.selector, text, p.clear !== false]);
+      }
+
+      case "key": {
+        if (!p.key) return fail("bad_params", "key requires key");
+        const hasDbg = await attach(tabId);
+        if (hasDbg) {
+          await nativeKey(tabId, p.key);
+          return { success: true, key: p.key, native: true };
+        }
+        return await execInTab(tabId, page.pagePressKey, [p.key]);
+      }
+
+      case "scroll": {
+        const hasDbg = await attach(tabId);
+        if (hasDbg) {
+          await nativeScroll(tabId, 500, 300, Number(p.x || 0), Number(p.y || 300));
+          return { success: true, scrollX: p.x || 0, scrollY: p.y || 300, native: true };
+        }
+        return await execInTab(tabId, page.pageScroll, [Number(p.x || 0), Number(p.y || 0)]);
+      }
+
+      case "snapshot": {
+        await attach(tabId);
+        const snap = await snapshotTab(tabId, p.mode || "interactive", p.frames !== false);
+        if (!snap.success) return snap;
+        return { success: true, text: snap.text, refs: snap.refs, url: snap.url, title: snap.title };
+      }
+
+      case "batch": {
+        const tab = await getTargetTab(p.tabId);
+        if (!tab) return fail("no_active_tab", "No active tab");
+        const steps = p.steps || [];
+        return await runOnTab(tab.id, async () => {
+          const results = [];
+          for (const step of steps) {
+            if (step.action === "sleep" || step.action === "wait_ms") {
+              await new Promise(r => setTimeout(r, Number(step.ms || 100)));
+              results.push({ action: "sleep", success: true, ms: step.ms });
+              continue;
+            }
+            const stepCmd = { action: step.action, params: { ...step, tabId: step.tabId || tab.id } };
+            const r = await execute(stepCmd);
+            results.push(r);
+            if (r && r.success === false && step.stopOnError !== false) {
+              return fail(r.code || "step_failed", r.error, { stoppedAt: step.action, results, tab: tabInfo(tab) });
+            }
+          }
+          return { success: true, count: results.length, results, tab: tabInfo(tab) };
+        });
+      }
+
+      case "eval": {
+        if (p.code === undefined) return fail("bad_params", "eval requires code");
+        const hasDbg = await ensureDebugger(tabId);
+        if (hasDbg) {
+          try {
+            const res = await cdpSend(tabId, "Runtime.evaluate", {
+              expression: p.code,
+              returnByValue: true,
+              awaitPromise: true,
+            });
+            if (res.exceptionDetails) {
+              const desc = res.exceptionDetails.exception
+                ? res.exceptionDetails.exception.description || res.exceptionDetails.text
+                : res.exceptionDetails.text;
+              return fail("eval_error", desc);
+            }
+            return { success: true, result: res.result ? res.result.value : undefined };
+          } catch (cdpErr) {
+            // CDP not available for this tab — fall through to execInTab
+          }
+        }
+        return await execInTab(tabId, page.pageEval, [p.code], "MAIN");
+      }
+
+      case "check_radio":
+      case "check":
+      case "select_radio": {
+        return await execInTab(tabId, page.pageCheckRadio, [p.selector || p.target, p.text, p.value]);
+      }
+
+      case "get_text":
+      case "text": {
+        const target = p.ref || p.target || p.selector;
+        const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+        if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: "${target}"`);
+        const textRes = await execInTab(tabId, page.pageTextAt, [r.x, r.y]);
+        return { ...r, ...textRes };
+      }
+
+      default:
+        return fail("unknown_action", `Unknown action: ${action}`);
+    }
+  } catch (err) {
+    log(`Error in ${action}: ${err.message}`);
+    return fail("internal_error", err.message);
+  }
+}
+
+// Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
+const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
+const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new"]);
+
+export async function dispatch(cmd) {
+  const p = cmd.params || {};
+  if (TABLESS.has(cmd.action)) return execute(cmd);
+  const tab = await getTargetTab(p.tabId);
+  if (!tab) {
+    return (p.tabId !== undefined && p.tabId !== null && p.tabId !== "")
+      ? fail("tab_not_found", `Tab ${p.tabId} no longer exists`)
+      : fail("no_active_tab", "No active tab");
+  }
+  cmd.params = { ...p, tabId: tab.id };
+  const open = getOpenDialog(tab.id);
+  if (open && !NOQUEUE.has(cmd.action)) {
+    return fail("dialog_open", `A ${open.type} dialog is open: "${open.message}". Call dialog with policy accept or dismiss.`, { dialog: open, tab: tabInfo(tab) });
+  }
+  const result = NOQUEUE.has(cmd.action) ? await execute(cmd) : await runOnTab(tab.id, () => execute(cmd));
+  if (result && typeof result === "object" && !result.tab) {
+    let t = tab;
+    try { t = await chrome.tabs.get(tab.id); } catch (e) {}
+    result.tab = tabInfo(t);
+  }
+  return result;
+}
