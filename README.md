@@ -17,6 +17,10 @@ synthetic clicks a page can tell apart.
 
 Three surfaces sit on one local daemon: an MCP server for agent clients, a CLI, and a Python API.
 
+Everything here is tested against Microsoft Edge. The extension is plain MV3 and the daemon speaks
+ordinary CDP, so other Chromium browsers ought to work, but none are covered by the test suite and
+none are claimed.
+
 ---
 
 ## Install

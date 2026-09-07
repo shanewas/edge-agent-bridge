@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- `scripts/publish_chrome.py` submits the same extension zip to the Chrome Web Store through its
-  v2 API, exchanging a refresh token for a bearer token and polling the upload before it submits.
+- `scripts/publish_chrome.py` submits the extension to the Chrome Web Store through its v2 API,
+  exchanging a refresh token for a bearer token and polling the upload before it submits.
   `release.yml` gained a matching job, so one release can reach both stores.
+- `build_extension.py --store chrome|edge` writes the listing name for that store and a shared
+  description. The old one ran to 169 characters, past Chrome's 132-character limit, and carried
+  another vendor's trademark in a name Chrome would have shown. `--check` now fails on an overlong
+  description rather than leaving it for the store to reject.
 
 ## 2.0.1
 
@@ -40,6 +44,8 @@ Fixes an authentication hole in the daemon, and corrects what 2.0.0 shipped arou
 - Benchmark wall-clock thresholds no longer fail the run by default. A loaded CI runner missed
   them at random, which would have made the pipeline flap. `EDGE_BRIDGE_BENCH_STRICT=1`
   restores them as gates.
+
+### Docs and packaging
 
 - README describes the 2.x surfaces: the MCP server and `edge-bridge setup`, snapshot refs, the
   token on `/exec`, and the shared-host limit that pairing covers. It had still been documenting

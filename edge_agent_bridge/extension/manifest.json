@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Edge Agent Bridge",
   "version": "2.0.1",
-  "description": "Edge Agent Bridge connects local developer automation scripts and AI coding agents to active Microsoft Edge tabs over RFC 6455 WebSockets and CDP native hardware events.",
+  "description": "Let an AI agent drive the browser tabs you already have open, using page snapshots with stable element refs and trusted input.",
   "permissions": [
     "tabs",
     "activeTab",

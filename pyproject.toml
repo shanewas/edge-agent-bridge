@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edge-agent-bridge"
 dynamic = ["version"]
-description = "Real-time AI agent bridge for Microsoft Edge using active browser sessions, CDP hardware events, and WebSockets."
+description = "Let AI agents drive your open Microsoft Edge tabs by element reference, over MCP, a CLI, or Python."
 readme = "README.md"
 license = "MIT"
 authors = [
