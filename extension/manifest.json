@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Antigravity Edge Bridge",
-  "version": "1.1.0",
-  "description": "Direct agent-to-browser bridge allowing Antigravity to interact with real Edge tabs.",
+  "version": "1.1.1",
+  "description": "Antigravity Edge Bridge — connects local developer automation scripts and AI coding agents to active Microsoft Edge tabs over RFC 6455 WebSockets and CDP native hardware events.",
   "permissions": [
     "tabs",
     "activeTab",

@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edge-agent-bridge"
-version = "1.1.0"
+version = "1.1.1"
 description = "Real-time AI agent bridge for Microsoft Edge using active browser sessions, CDP hardware events, and WebSockets."
 readme = "README.md"
 license = "MIT"
 authors = [
+    { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
+]
+maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
 requires-python = ">=3.8"
