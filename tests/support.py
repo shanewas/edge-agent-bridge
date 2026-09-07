@@ -87,13 +87,17 @@ class DaemonHandle:
         self.proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(self.port)],
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        deadline = time.time() + 10
+        deadline = time.time() + 30
         while time.time() < deadline:
             try:
                 if self.status().get("bridge_running"):
                     return self
-            except OSError:
-                time.sleep(0.1)
+            except (OSError, http.client.HTTPException, ValueError):
+                # A socket that is listening but not yet serving answers with a truncated response,
+                # which surfaces as BadStatusLine rather than OSError. Catching only OSError let that
+                # escape the retry loop, so the fixture failed whenever the machine was loaded.
+                pass
+            time.sleep(0.1)
         out = self.proc.stdout.read().decode(errors="replace")[-2000:] if self.proc.poll() is not None else ""
         self.stop()
         raise RuntimeError("daemon did not start: " + out)
