@@ -1,0 +1,152 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_extension:
+        description: Submit the extension even if no extension file changed
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      pypi_new: ${{ steps.pypi.outputs.new }}
+      ext_changed: ${{ steps.ext.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest build
+      - run: python scripts/build_extension.py --check
+      - run: python -m pytest -q -m "not e2e"
+
+      - id: version
+        run: |
+          v=$(python -c "import edge_agent_bridge; print(edge_agent_bridge.__version__)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "version $v"
+
+      - id: pypi
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          published=$(curl -fsSL https://pypi.org/pypi/edge-agent-bridge/json | python -c "import json,sys;print('\n'.join(json.load(sys.stdin)['releases']))" || true)
+          if echo "$published" | grep -qx "$VERSION"; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "$VERSION is already on PyPI, nothing to release"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: ext
+        env:
+          BEFORE: ${{ github.event.before }}
+          FORCED: ${{ inputs.force_extension }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=$FORCED" >> "$GITHUB_OUTPUT"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- edge_agent_bridge/extension; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  pypi:
+    needs: gate
+    if: needs.gate.outputs.pypi_new == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: python -m build --sdist --wheel
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  store:
+    needs: [gate, pypi]
+    if: needs.gate.outputs.pypi_new == 'true' && needs.gate.outputs.ext_changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/build_extension.py
+      - name: Submit to the Edge Add-ons store
+        env:
+          EDGE_ADDONS_CLIENT_ID: ${{ secrets.EDGE_ADDONS_CLIENT_ID }}
+          EDGE_ADDONS_API_KEY: ${{ secrets.EDGE_ADDONS_API_KEY }}
+          EDGE_ADDONS_PRODUCT_ID: ${{ secrets.EDGE_ADDONS_PRODUCT_ID }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          python scripts/publish_extension.py \
+            "dist/edge-agent-bridge-extension-$VERSION.zip" \
+            --notes "Automated submission of $VERSION from ${{ github.sha }}"
+
+  chrome:
+    needs: [gate, pypi]
+    if: needs.gate.outputs.pypi_new == 'true' && needs.gate.outputs.ext_changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    # The same package goes to both stores. Chrome review is slower and stricter about the
+    # debugger permission, so the two listings drift apart in time even on one release.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/build_extension.py --store chrome
+      - name: Submit to the Chrome Web Store
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_ITEM_ID: ${{ secrets.CHROME_ITEM_ID }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: python scripts/publish_chrome.py "dist/edge-agent-bridge-extension-chrome-$VERSION.zip"
+
+  github_release:
+    needs: [gate, pypi]
+    if: needs.gate.outputs.pypi_new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: |
+          python -m build --sdist --wheel
+          python scripts/build_extension.py
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            dist/edge_agent_bridge-$VERSION*.whl \
+            dist/edge_agent_bridge-$VERSION*.tar.gz \
+            dist/edge-agent-bridge-extension-$VERSION.zip \
+            --title "v$VERSION" --generate-notes

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Form fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .row { margin: 8px 0; }
+    .file-hidden { display: none; }
+    .wrap { border: 1px solid #ccc; padding: 10px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Sign in</h1>
+  <form id="login" onsubmit="return false;">
+    <div class="row"><label for="username">Username</label> <input id="username" type="text" placeholder="your name" autocomplete="off"></div>
+    <div class="row"><label for="password">Password</label> <input id="password" type="password" autocomplete="off"></div>
+    <div class="row"><label><input id="remember" type="checkbox" checked> Remember me</label></div>
+    <div class="row">
+      <label><input type="radio" name="plan" value="free" checked> Free</label>
+      <label><input type="radio" name="plan" value="pro"> Pro</label>
+    </div>
+    <div class="row">
+      <label for="language">Language</label>
+      <select id="language">
+        <option value="en" selected>English</option>
+        <option value="ja">日本語</option>
+        <option value="de">Deutsch</option>
+      </select>
+    </div>
+    <div class="row"><label for="notes">Notes</label> <textarea id="notes"></textarea></div>
+    <div class="row">
+      <label for="attachment">Choose file</label>
+      <input id="attachment" type="file" class="file-hidden">
+      <button type="button" id="upload-btn">Upload</button>
+      <span id="upload-name"></span>
+    </div>
+  </form>
+
+  <div class="wrap" id="signin-wrap">Sign in area with some words
+    <button type="button" id="signin">Sign in</button>
+  </div>
+
+  <table id="files">
+    <thead><tr><th>ID</th><th>Name</th><th></th></tr></thead>
+    <tbody>
+      <tr id="row-1"><td>12080</td><td>spec.pdf</td><td><button type="button" class="open">Open</button></td></tr>
+      <tr id="row-2"><td>12081</td><td>notes.txt</td><td><button type="button" class="open">Open</button></td></tr>
+    </tbody>
+  </table>
+
+  <a id="forgot" href="/reset">Forgot password?</a>
+  <button type="button" id="hidden-btn" style="display:none">Hidden button</button>
+  <div aria-hidden="true"><button type="button" id="aria-hidden-btn">Aria hidden</button></div>
+  <p id="static">Static paragraph of text for full mode.</p>
+  <button type="button" id="verify">Verify</button>
+  <span id="verify-out"></span>
+
+  <script>
+    document.getElementById("verify").addEventListener("click", function (e) {
+      this.setAttribute("data-clicked", "true");
+      this.setAttribute("data-trusted", String(e.isTrusted));
+      document.getElementById("verify-out").textContent = "clicked";
+    });
+    document.getElementById("signin").addEventListener("click", function (e) {
+      this.setAttribute("data-clicked", "true");
+    });
+    document.getElementById("upload-btn").addEventListener("click", function () {
+      document.getElementById("attachment").click();
+    });
+    document.getElementById("attachment").addEventListener("change", function () {
+      document.getElementById("upload-name").textContent = this.files.length ? this.files[0].name : "";
+    });
+    document.getElementById("language").addEventListener("change", function () {
+      this.setAttribute("data-changed", this.value);
+    });
+    var keydowns = 0;
+    document.getElementById("notes").addEventListener("keydown", function () {
+      keydowns += 1;
+      this.setAttribute("data-keydowns", String(keydowns));
+    });
+    document.querySelectorAll("button.open").forEach(function (b) {
+      b.addEventListener("click", function () { b.closest("tr").setAttribute("data-opened", "true"); });
+    });
+  </script>
+</body>
+</html>

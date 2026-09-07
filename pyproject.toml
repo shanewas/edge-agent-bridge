@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edge-agent-bridge"
-version = "1.2.1"
-description = "Universal AI agent bridge for Microsoft Edge and Chromium browsers using active sessions, CDP hardware events, and WebSockets."
+dynamic = ["version"]
+description = "Let AI agents drive your open Microsoft Edge tabs by element reference, over MCP, a CLI, or Python."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -14,19 +14,19 @@ authors = [
 maintainers = [
     { name = "Shanewas Ahmed", email = "shanewasahmed@gmail.com" }
 ]
-requires-python = ">=3.8"
-keywords = ["agent-browser-bridge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "edge", "chromium", "real-time"]
+requires-python = ">=3.10"
+keywords = ["edge", "browser-automation", "agent", "cdp", "websocket", "ai-agents", "real-time", "mcp"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Testing",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
@@ -39,8 +39,6 @@ Issues = "https://github.com/shanewas/edge-agent-bridge/issues"
 Funding = "https://github.com/sponsors/shanewas"
 
 [project.scripts]
-agent-browser-bridge = "edge_agent_bridge.cli:main"
-abb = "edge_agent_bridge.cli:main"
 edge-bridge = "edge_agent_bridge.cli:main"
 edge = "edge_agent_bridge.cli:main"
 
@@ -55,3 +53,10 @@ edge_agent_bridge = [
     "extension/*.json",
     "extension/icons/*.png"
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "edge_agent_bridge.__version__"}
+
+[tool.pytest.ini_options]
+markers = ["e2e: needs a running Edge with the extension"]
+testpaths = ["tests"]

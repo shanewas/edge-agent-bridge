@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Noisy fixture</title>
+</head>
+<body>
+  <h1>Noisy fixture</h1>
+  <button type="button" id="confirm-btn">Confirm</button>
+  <button type="button" id="alert-btn">Alert</button>
+  <span id="out"></span>
+  <script>
+    console.error("boom");
+    console.log("long:" + "x".repeat(5000));
+    setTimeout(function () { throw new Error("kaboom"); }, 50);
+    document.getElementById("confirm-btn").addEventListener("click", function () {
+      var ok = confirm("Sure?");
+      this.setAttribute("data-result", String(ok));
+    });
+    document.getElementById("alert-btn").addEventListener("click", function () {
+      alert("Hi");
+      this.setAttribute("data-done", "1");
+    });
+  </script>
+</body>
+</html>
