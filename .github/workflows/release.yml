@@ -103,6 +103,29 @@ jobs:
             "dist/edge-agent-bridge-extension-$VERSION.zip" \
             --notes "Automated submission of $VERSION from ${{ github.sha }}"
 
+  chrome:
+    needs: [gate, pypi]
+    if: needs.gate.outputs.pypi_new == 'true' && needs.gate.outputs.ext_changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    # The same package goes to both stores. Chrome review is slower and stricter about the
+    # debugger permission, so the two listings drift apart in time even on one release.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/build_extension.py
+      - name: Submit to the Chrome Web Store
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_ITEM_ID: ${{ secrets.CHROME_ITEM_ID }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: python scripts/publish_chrome.py "dist/edge-agent-bridge-extension-$VERSION.zip"
+
   github_release:
     needs: [gate, pypi]
     if: needs.gate.outputs.pypi_new == 'true'

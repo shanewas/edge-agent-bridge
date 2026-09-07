@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `scripts/publish_chrome.py` submits the same extension zip to the Chrome Web Store through its
+  v2 API, exchanging a refresh token for a bearer token and polling the upload before it submits.
+  `release.yml` gained a matching job, so one release can reach both stores.
+
 ## 2.0.1
 
 Fixes an authentication hole in the daemon, and corrects what 2.0.0 shipped around the code.

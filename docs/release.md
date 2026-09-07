@@ -24,8 +24,8 @@ PyPI uses [trusted publishing](https://docs.pypi.org/trusted-publishers/), so no
 stored anywhere. On PyPI, add a trusted publisher for the `edge-agent-bridge` project pointing at
 this repository, workflow `release.yml`, environment `release`.
 
-The store needs three repository secrets from **Partner Center > Microsoft Edge > Publish API**.
-If that page still shows an access token URL and secrets, click **Enable** first: the v1.1
+The Edge store needs three repository secrets from **Partner Center > Microsoft Edge > Publish
+API**. If that page still shows an access token URL and secrets, click **Enable** first: the v1.1
 credentials are a Client ID and an API key.
 
 | Secret | Where it comes from |
@@ -33,6 +33,20 @@ credentials are a Client ID and an API key.
 | `EDGE_ADDONS_CLIENT_ID` | Client ID on the Publish API page |
 | `EDGE_ADDONS_API_KEY` | API key on the same page; note the expiry and renew before it lapses |
 | `EDGE_ADDONS_PRODUCT_ID` | Product ID GUID on the extension's overview page |
+
+The Chrome Web Store needs five, and a listing that already exists: the API updates an item, it
+cannot create one. Publish the first version by hand in the developer dashboard, then automation
+takes over.
+
+| Secret | Where it comes from |
+| --- | --- |
+| `CHROME_CLIENT_ID` | OAuth client (Web application) in Google Cloud Console |
+| `CHROME_CLIENT_SECRET` | same client |
+| `CHROME_REFRESH_TOKEN` | minted for scope `https://www.googleapis.com/auth/chromewebstore`, usually via the OAuth Playground with the playground added as an authorised redirect URI |
+| `CHROME_PUBLISHER_ID` | the publisher the item sits under |
+| `CHROME_ITEM_ID` | the 32-character item id from the dashboard URL |
+
+Enable the Chrome Web Store API for the project in Cloud Console before minting the token.
 
 Create a `release` environment in the repository settings and attach the secrets to it. Adding a
 required reviewer to that environment puts a manual approval in front of both publishers.
@@ -54,10 +68,12 @@ Everything the workflow does also runs by hand:
 7. **GitHub release.** `gh release create v<version> dist/*<version>* --title "v<version>" --generate-notes`.
 8. **PyPI.** `python -m twine upload dist/*<version>* --disable-progress-bar` (the flag avoids the
    cp932 crash on Windows terminals).
-9. **Store.** Export `EDGE_ADDONS_CLIENT_ID`, `EDGE_ADDONS_API_KEY` and `EDGE_ADDONS_PRODUCT_ID`,
-   then `python scripts/publish_extension.py dist/edge-agent-bridge-extension-<version>.zip`.
-   `--upload-only` stages the draft without sending it for review. Store review takes days; until
-   the new version lands, a daemon newer than the installed extension answers new actions with
+9. **Stores.** Export the Edge credentials, then
+   `python scripts/publish_extension.py dist/edge-agent-bridge-extension-<version>.zip`. Export the
+   Chrome ones and run `python scripts/publish_chrome.py` on the same zip. Both take
+   `--upload-only` to stage a draft without sending it for review. Review takes days on Edge and
+   longer on Chrome, which scrutinises the `debugger` permission; until a store lands the new
+   version, a daemon newer than the installed extension answers new actions with
    `extension_outdated`.
 10. **Smoke.** On each OS you can reach: `pip install --upgrade edge-agent-bridge`,
     `edge-bridge daemon restart`, `edge-bridge status`, `edge-bridge --json snapshot` on any page.
