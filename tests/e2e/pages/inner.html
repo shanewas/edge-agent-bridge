@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inner frame</title>
+  <style>body { font-family: sans-serif; margin: 10px; }</style>
+</head>
+<body>
+  <button type="button" id="ping">Ping</button>
+  <label for="note">Note</label> <input id="note" type="text" autocomplete="off">
+  <script>
+    var tag = new URLSearchParams(location.search).get("tag") || "inner";
+    document.title = "Inner " + tag;
+    document.getElementById("ping").addEventListener("click", function (e) {
+      window.parent.postMessage({ hit: tag, trusted: e.isTrusted }, "*");
+    });
+    document.getElementById("note").addEventListener("input", function () {
+      window.parent.postMessage({ note: tag + ":" + this.value }, "*");
+    });
+  </script>
+</body>
+</html>

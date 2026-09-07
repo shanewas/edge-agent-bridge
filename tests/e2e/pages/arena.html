@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Edge Bridge Benchmark Arena</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #0f172a; color: #f8fafc; }
+    h1, h2, h3 { margin-top: 0; color: #38bdf8; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 15px; }
+    button { background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    button:hover { background: #1d4ed8; }
+    button:active { background: #1e40af; }
+    input[type="text"] { width: 90%; padding: 8px; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: white; }
+    .metric { font-size: 20px; font-weight: bold; color: #4ade80; margin-left: 10px; }
+    .menu-root { position: relative; display: inline-block; }
+    .menu-sub1 { display: none; position: absolute; top: 100%; left: 0; background: #334155; border: 1px solid #64748b; border-radius: 4px; padding: 5px; width: 160px; z-index: 100; }
+    .menu-sub2 { display: none; position: absolute; top: 0; left: 100%; background: #475569; border: 1px solid #64748b; border-radius: 4px; padding: 5px; width: 160px; z-index: 101; }
+    .menu-item { padding: 6px 10px; cursor: pointer; border-radius: 2px; }
+    .menu-item:hover { background: #0284c7; }
+    .menu-root:hover > .menu-sub1 { display: block !important; }
+    .menu-item-nested:hover > .menu-sub2 { display: block !important; }
+    .drag-container { display: flex; gap: 20px; align-items: center; }
+    .drag-box { width: 120px; height: 70px; display: flex; align-items: center; justify-content: center; border-radius: 6px; font-weight: bold; }
+    #drag-src { background: #e11d48; cursor: grab; user-select: none; }
+    #drag-tgt { background: #059669; border: 2px dashed #34d399; }
+    #drag-tgt.drag-over { background: #10b981; border-color: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Edge Bridge Benchmark Arena</h1>
+  <div class="grid">
+    <div class="card" id="card-click">
+      <h3>1. Native Click Burst</h3>
+      <button id="bm-click-btn">Click Me Rapidly</button>
+      <div style="margin-top: 10px;">Clicks: <span id="click-count" class="metric">0</span> | Trusted: <span id="trusted-count" class="metric">0</span></div>
+    </div>
+    <div class="card" id="card-type">
+      <h3>2. Typing Integrity</h3>
+      <label for="bm-type-input">Input Target:</label>
+      <input type="text" id="bm-type-input" placeholder="Awaiting native typing..." autocomplete="off" />
+      <div style="margin-top: 10px;">Length: <span id="type-len" class="metric">0</span></div>
+    </div>
+    <div class="card" id="card-hover">
+      <h3>3. CSS :hover Cascade</h3>
+      <div class="menu-root" id="menu-root">
+        <button id="hover-root-btn">Dropdown Level 1</button>
+        <div class="menu-sub1" id="menu-sub1">
+          <div class="menu-item">Option A</div>
+          <div class="menu-item menu-item-nested" id="hover-nested-item">Option B (Nested) &gt;
+            <div class="menu-sub2" id="menu-sub2"><div class="menu-item" id="hover-target-final">Deep Target C</div></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 15px;">Deep Item Clicked: <span id="hover-click-result" class="metric">NO</span></div>
+    </div>
+    <div class="card" id="card-drag">
+      <h3>4. Native Drag &amp; Drop</h3>
+      <div class="drag-container">
+        <div id="drag-src" class="drag-box" draggable="true">DRAG ME</div>
+        <div id="drag-tgt" class="drag-box" data-dropped="false">DROP ZONE</div>
+      </div>
+      <div style="margin-top: 10px;">Drop Result: <span id="drag-result" class="metric">Pending</span></div>
+    </div>
+  </div>
+  <div class="card" id="card-dom">
+    <h3>5. DOM Stress Arena (3,000 elements)</h3>
+    <div id="dom-status">Generating…</div>
+    <div id="dom-container" style="max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; border: 1px solid #475569; margin-top: 10px;"></div>
+  </div>
+  <script>
+    let clickCnt = 0, trustedCnt = 0;
+    document.getElementById("bm-click-btn").addEventListener("click", function (e) {
+      clickCnt++; if (e.isTrusted) trustedCnt++;
+      document.getElementById("click-count").textContent = clickCnt;
+      document.getElementById("trusted-count").textContent = trustedCnt;
+    });
+    document.getElementById("bm-type-input").addEventListener("input", function () {
+      document.getElementById("type-len").textContent = this.value.length;
+    });
+    document.getElementById("hover-target-final").addEventListener("click", function () {
+      document.getElementById("hover-click-result").textContent = "YES";
+    });
+    const dragSrc = document.getElementById("drag-src"), dragTgt = document.getElementById("drag-tgt");
+    dragSrc.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", "DRAG_PAYLOAD_OK"); });
+    dragTgt.addEventListener("dragover", e => { e.preventDefault(); dragTgt.classList.add("drag-over"); });
+    dragTgt.addEventListener("dragleave", () => { dragTgt.classList.remove("drag-over"); });
+    dragTgt.addEventListener("drop", e => { e.preventDefault(); dragTgt.classList.remove("drag-over"); dragTgt.setAttribute("data-dropped", "true"); document.getElementById("drag-result").textContent = "DROPPED"; });
+    const domCont = document.getElementById("dom-container"), frag = document.createDocumentFragment();
+    for (let i = 1; i <= 3000; i++) {
+      const mod = i % 4; let el;
+      if (mod === 0) { el = document.createElement("button"); el.id = "btn-dom-" + i; el.textContent = "Btn " + i; }
+      else if (mod === 1) { el = document.createElement("input"); el.id = "inp-dom-" + i; el.type = "text"; el.value = "Val " + i; el.style.width = "40px"; }
+      else if (mod === 2) { el = document.createElement("a"); el.id = "link-dom-" + i; el.href = "#" + i; el.textContent = "Lnk " + i; }
+      else { el = document.createElement("span"); el.id = "span-dom-" + i; el.textContent = "#" + i; }
+      el.style.fontSize = "10px";
+      frag.appendChild(el);
+    }
+    domCont.appendChild(frag);
+    document.getElementById("dom-status").textContent = "3,000 elements loaded.";
+    window.__domReady = true;
+  </script>
+</body>
+</html>

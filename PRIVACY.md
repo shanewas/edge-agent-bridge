@@ -1,8 +1,8 @@
-# Privacy Policy for Antigravity Edge Bridge
+# Privacy Policy for Edge Agent Bridge
 
 **Last updated:** September 7, 2026
 
-Antigravity Edge Bridge ("the Extension") is an open-source browser automation bridge designed for developers running local AI coding assistants. This policy explains how information is handled by the Extension.
+Edge Agent Bridge ("the Extension") is an open-source browser automation bridge for developers running local AI agents. This policy explains how information is handled by the Extension.
 
 ---
 
@@ -15,33 +15,45 @@ Antigravity Edge Bridge ("the Extension") is an open-source browser automation b
 
 ### 2. Localhost-Only Communication
 
-- All communication occurs strictly on your local machine (`localhost` / `127.0.0.1:18999`) between the browser extension and your locally executed Python bridge daemon (`edge-bridge` / `bridge.py`).
+- All communication occurs strictly on your local machine (`127.0.0.1:18999`) between the browser extension and the locally executed Python bridge daemon (`edge-bridge`).
 - No data is ever transmitted to external servers, cloud services, or third parties.
-- The local bridge daemon strictly binds to `127.0.0.1` and rejects remote network traffic.
+- The local bridge daemon binds only to `127.0.0.1`, rejects requests whose `Host` header is not the local address, and requires a token stored in your user profile for every command it forwards to the Extension.
 
 ---
 
-### 3. Purpose of Requested Permissions
+### 3. What the Extension does on a page when asked
 
-The Extension requests only permissions essential to its single purpose — developer browser automation:
+Every action below happens only in response to a command from your local agent through the daemon; the Extension never acts on its own.
 
-- **`debugger`**: Used exclusively to dispatch native Chrome DevTools Protocol (CDP) input events (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, `Input.insertText`) to interact with page elements via physical event simulation.
-- **`<all_urls>` & `tabs` / `activeTab`**: Used to locate and interact with the specific browser tabs that you explicitly request your local AI agent to automate.
-- **`scripting`**: Used to query interactive DOM elements and render an optional visual cursor indicator on the active tab.
-- **`storage`**: Used solely to persist local connection status and the latest log message inside your local browser profile.
-- **`alarms`**: Used to periodically check the connection status of the local bridge daemon.
+- Reads the structure of the page (roles, labels, current form values) to produce a snapshot for the agent. Password field values are masked in that snapshot.
+- Dispatches mouse and keyboard input, selects options, and sets files on file inputs the agent names.
+- Captures a screenshot of the tab when the agent asks for one. The image goes to the local agent only.
+- Records recent console messages, uncaught errors, and native dialogs of the tab in memory (and in the browser's session storage, which is cleared when Edge closes) so the agent can read them.
+- Draws a short-lived highlight ring and cursor overlay on the page so you can see what the agent is about to act on. This can be turned off per command.
+- Optionally opens new tabs in a tab group named by the agent (default "Agent") so you can tell them apart from your own.
 
 ---
 
-### 4. Open Source Transparency
+### 4. Purpose of Requested Permissions
 
-The complete source code of Antigravity Edge Bridge is open source under the MIT License and available for independent public audit:
+- **`debugger`**: dispatch native Chrome DevTools Protocol input events, capture screenshots, set files on file inputs, and receive console, network and dialog events for the tabs the agent works in.
+- **`<all_urls>` & `tabs` / `activeTab`**: locate and interact with the tabs the agent is asked to automate.
+- **`scripting`**: read page structure for snapshots and render the visual overlay.
+- **`storage`**: persist the last log line, the optional pairing token, and per-tab console buffers inside your local browser profile.
+- **`alarms`**: periodically re-check the connection to the local daemon.
+- **`tabGroups`**: place agent-opened tabs in a named group.
+
+---
+
+### 5. Open Source Transparency
+
+The complete source code of Edge Agent Bridge is open source under the MIT License and available for independent public audit:
 
 - **Repository**: https://github.com/shanewas/edge-agent-bridge
 
 ---
 
-### 5. Contact
+### 6. Contact
 
 If you have any questions regarding this Privacy Policy, please open an issue on GitHub or contact:
 

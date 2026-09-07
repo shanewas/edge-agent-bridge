@@ -1,33 +1,43 @@
 {
   "manifest_version": 3,
-  "name": "Antigravity Edge Bridge",
-  "version": "1.1.1",
-  "description": "Antigravity Edge Bridge — connects local developer automation scripts and AI coding agents to active Microsoft Edge tabs over RFC 6455 WebSockets and CDP native hardware events.",
+  "name": "Edge Agent Bridge",
+  "version": "2.0.1",
+  "description": "Edge Agent Bridge connects local developer automation scripts and AI coding agents to active Microsoft Edge tabs over RFC 6455 WebSockets and CDP native hardware events.",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
     "storage",
     "alarms",
-    "debugger"
+    "debugger",
+    "tabGroups"
   ],
   "host_permissions": [
     "<all_urls>",
     "http://127.0.0.1/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_start"
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Antigravity Edge Bridge",
+    "default_title": "Edge Agent Bridge",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

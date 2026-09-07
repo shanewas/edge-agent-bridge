@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Antigravity Edge Bridge</title>
+  <title>Edge Agent Bridge</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -70,6 +70,38 @@
       color: #9cdcfe;
       max-height: 80px;
       overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .warn {
+      background: #5c1d1d;
+      color: #fca5a5;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 12px;
+      display: none;
+    }
+    .pairing {
+      display: none;
+    }
+    .pairing input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #181818;
+      color: #e0e0e0;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 6px;
+      font-family: monospace;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+    .pairing button {
+      background: #0078d4;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 10px;
+      cursor: pointer;
     }
     .footer {
       font-size: 11px;
@@ -81,13 +113,22 @@
 </head>
 <body>
   <div class="header">
-    <div class="title">Antigravity Bridge</div>
+    <div class="title">Edge Agent Bridge</div>
     <div id="statusBadge" class="badge disconnected">Offline</div>
   </div>
 
   <div class="section">
-    <div class="label">Bridge Server</div>
-    <div class="info-box">http://127.0.0.1:18999</div>
+    <div class="label">Bridge</div>
+    <div class="info-box">http://127.0.0.1:18999<br><span id="versions">checking…</span></div>
+  </div>
+
+  <div id="outdated" class="section warn">The daemon needs a newer extension. Update it from the Edge Add-ons store, or reload the unpacked extension.</div>
+
+  <div id="pairing" class="section pairing">
+    <div class="label">Pairing token</div>
+    <input id="pairToken" type="text" placeholder="paste the token from edge-bridge status" autocomplete="off">
+    <button id="pairSave">Save and reconnect</button>
+    <div id="pairMsg" class="label"></div>
   </div>
 
   <div class="section">
@@ -96,10 +137,15 @@
   </div>
 
   <div class="section">
+    <div class="label">Last action</div>
+    <div id="logBox" class="log-box"></div>
+  </div>
+
+  <div class="section">
     <div class="label">Quick Start</div>
     <div class="info-box" style="line-height: 1.5; user-select: all; color: #a6e3a1;">
       pip install edge-agent-bridge<br>
-      edge-bridge status
+      edge-bridge setup
     </div>
   </div>
 

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Loading</title>
+</head>
+<body>
+  <h1>Slow fixture</h1>
+  <p id="status">waiting for /slow</p>
+  <script>
+    var ws = new WebSocket("ws://" + location.host + "/ws");
+    ws.onopen = function () { window.__wsOpen = true; };
+    fetch("/slow?ms=1500").then(function (r) { return r.text(); }).then(function () {
+      document.title = "Done";
+      document.getElementById("status").textContent = "Done";
+      document.body.setAttribute("data-done", "1");
+    });
+  </script>
+</body>
+</html>

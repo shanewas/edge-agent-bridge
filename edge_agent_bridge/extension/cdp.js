@@ -1,0 +1,210 @@
+// Edge Agent Bridge - chrome.debugger session cache, CDP input helpers, per-tab command queue.
+
+const attachedTabs = new Set();
+
+function isDebuggerAttached(tabId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.debugger.getTargets((targets) => {
+        if (chrome.runtime.lastError || !targets) return resolve(false);
+        const t = targets.find(target => target.tabId === Number(tabId));
+        resolve(Boolean(t && t.attached));
+      });
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+export async function ensureDebugger(tabId) {
+  if (attachedTabs.has(tabId)) return true;
+  const attached = await isDebuggerAttached(tabId);
+  if (attached) {
+    attachedTabs.add(tabId);
+    return true;
+  }
+  return new Promise((resolve) => {
+    chrome.debugger.attach({ tabId }, "1.3", () => {
+      if (chrome.runtime.lastError) {
+        const msg = (chrome.runtime.lastError.message || "").toLowerCase();
+        if (msg.includes("already attached")) {
+          attachedTabs.add(tabId);
+          return resolve(true);
+        }
+        attachedTabs.delete(tabId);
+        console.log(`[Edge Bridge] CDP attach failed for tab ${tabId}: ${msg}`);
+        return resolve(false);
+      }
+      attachedTabs.add(tabId);
+      resolve(true);
+    });
+  });
+}
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source && source.tabId) {
+    attachedTabs.delete(source.tabId);
+    console.log(`[Edge Bridge] CDP detached from tab ${source.tabId}: ${reason}`);
+  }
+});
+
+export async function cdpSend(tabId, method, params = {}) {
+  const sendOnce = () => new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(result || {});
+      }
+    });
+  });
+  try {
+    if (!attachedTabs.has(tabId)) {
+      await ensureDebugger(tabId);
+    }
+    return await sendOnce();
+  } catch (err) {
+    if (err.message && err.message.includes("not attached")) {
+      attachedTabs.delete(tabId);
+      const reattached = await ensureDebugger(tabId);
+      if (reattached) {
+        return await sendOnce();
+      }
+    }
+    throw err;
+  }
+}
+
+// --- Per-tab command queue (spec 7.2) ---
+// One promise chain per tab; a failed command never rejects the chain, so the next
+// command still runs. Different tabs run in parallel.
+const tabQueues = new Map();
+
+export function runOnTab(tabId, fn) {
+  const prev = tabQueues.get(tabId) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => fn());
+  const stored = next.catch(() => {});
+  tabQueues.set(tabId, stored);
+  stored.then(() => {
+    if (tabQueues.get(tabId) === stored) tabQueues.delete(tabId);
+  });
+  return next;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  attachedTabs.delete(tabId);
+  tabQueues.delete(tabId);
+});
+
+// --- Native input (CDP Input domain) ---
+
+export async function nativeMove(tabId, x, y) {
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+}
+
+export async function nativeClick(tabId, x, y, button = "left", clickCount = 1) {
+  const cx = Math.round(Number(x));
+  const cy = Math.round(Number(y));
+  const btnMask = button === "right" ? 2 : (button === "middle" ? 4 : 1);
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy });
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button, buttons: btnMask, clickCount });
+  await new Promise(r => setTimeout(r, 40));
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: cx, y: cy, button, buttons: 0, clickCount });
+}
+
+export async function nativeDrag(tabId, fromX, fromY, toX, toY, steps = 12, onStep = null) {
+  const fX = Math.round(Number(fromX));
+  const fY = Math.round(Number(fromY));
+  const tX = Math.round(Number(toX));
+  const tY = Math.round(Number(toY));
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: fX, y: fY });
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: fX, y: fY, button: "left", buttons: 1, clickCount: 1 });
+  await new Promise(r => setTimeout(r, 50));
+  for (let i = 1; i <= steps; i++) {
+    const cx = Math.round(fX + (tX - fX) * (i / steps));
+    const cy = Math.round(fY + (tY - fY) * (i / steps));
+    await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy, button: "left", buttons: 1 });
+    if (onStep) onStep(cx, cy);
+    await new Promise(r => setTimeout(r, 20));
+  }
+  await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: tX, y: tY, button: "left", buttons: 0, clickCount: 1 });
+}
+
+export async function nativeScroll(tabId, x, y, deltaX, deltaY) {
+  await cdpSend(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: Math.round(Number(x)),
+    y: Math.round(Number(y)),
+    deltaX: Number(deltaX || 0),
+    deltaY: Number(deltaY || 0)
+  });
+}
+
+const KEY_CODES = {
+  Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Space: 32,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+  Delete: 46, Home: 36, End: 35, PageUp: 33, PageDown: 34
+};
+
+export function parseKey(keyStr) {
+  let modifiers = 0;
+  let key = String(keyStr || "");
+  // Split on the last "+" so that "+" and "Ctrl++" name the plus key rather than an empty one.
+  const sep = key.lastIndexOf("+");
+  if (sep > 0) {
+    const parts = key.slice(0, sep).split("+");
+    key = key.slice(sep + 1) || "+";
+    for (const mod of parts) {
+      const m = mod.toLowerCase();
+      if (m === "ctrl" || m === "control") modifiers |= 2;
+      else if (m === "alt") modifiers |= 1;
+      else if (m === "shift") modifiers |= 4;
+      else if (m === "meta" || m === "cmd" || m === "win") modifiers |= 8;
+    }
+  }
+  const vk = KEY_CODES[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+  return { key, modifiers, vk };
+}
+
+// Type text one character at a time with real key events (autocomplete widgets need keydown).
+export async function nativeType(tabId, text, delayMs = 20) {
+  for (const ch of String(text)) {
+    if (ch === "\n" || ch === "\r") {
+      await nativeKey(tabId, "Enter");
+    } else {
+      const upper = ch.length === 1 && /[a-z0-9]/i.test(ch) ? ch.toUpperCase().charCodeAt(0) : 0;
+      await cdpSend(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: upper, nativeVirtualKeyCode: upper });
+      await cdpSend(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: ch, windowsVirtualKeyCode: upper, nativeVirtualKeyCode: upper });
+    }
+    if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+  }
+}
+
+export async function captureScreenshot(tabId, { format = "jpeg", quality = 80, clip = null } = {}) {
+  const params = { format, captureBeyondViewport: false };
+  if (format === "jpeg") params.quality = Math.max(1, Math.min(100, Number(quality) || 80));
+  if (clip) params.clip = { x: clip.x, y: clip.y, width: clip.width, height: clip.height, scale: 1 };
+  const res = await cdpSend(tabId, "Page.captureScreenshot", params);
+  return `data:image/${format};base64,${res.data}`;
+}
+
+export async function setFileInputFiles(tabId, selector, files) {
+  const doc = await cdpSend(tabId, "DOM.getDocument", { depth: 0 });
+  const { nodeId } = await cdpSend(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
+  if (!nodeId) throw new Error("marked file input not found in the main document");
+  await cdpSend(tabId, "DOM.setFileInputFiles", { nodeId, files });
+}
+
+export async function nativeKey(tabId, keyStr) {
+  const { key, modifiers, vk } = parseKey(keyStr);
+  await cdpSend(tabId, "Input.dispatchKeyEvent", {
+    type: "rawKeyDown", key, code: key, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk
+  });
+  if (key.length === 1 || key === "Enter") {
+    const txt = key === "Enter" ? "\r" : key;
+    await cdpSend(tabId, "Input.dispatchKeyEvent", { type: "char", text: txt, unmodifiedText: txt, modifiers });
+  }
+  await cdpSend(tabId, "Input.dispatchKeyEvent", {
+    type: "keyUp", key, code: key, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk
+  });
+}
