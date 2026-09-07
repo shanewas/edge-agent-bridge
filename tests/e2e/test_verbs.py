@@ -133,3 +133,15 @@ def test_screenshot_of_background_tab_keeps_focus(client, pages):
         assert client("tab")["tab"]["id"] == second
     finally:
         client("tab_close", {"tabId": second})
+
+
+def test_upload_by_selector_reaches_a_hidden_input(client, tmp_path):
+    # A styled drop zone hides the real input, so the point under the cursor is the wrapper.
+    # Naming the input by selector has to reach it anyway.
+    f = tmp_path / "viaselector.txt"
+    f.write_text("hi", encoding="utf-8")
+    r = client("upload", {"target": "#attachment", "files": [str(f)]})
+    assert r["success"], r
+    time.sleep(0.3)
+    assert client("eval", {"code": "document.getElementById('upload-name').textContent"})["result"] == "viaselector.txt"
+    assert client("eval", {"code": "document.querySelectorAll('[data-eab-upload]').length"})["result"] == 0

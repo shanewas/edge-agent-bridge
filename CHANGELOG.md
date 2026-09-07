@@ -9,6 +9,9 @@
   description was cut to 126 characters. The old one ran to 169, past the 132 the Chrome Web Store
   accepts, and the name carried another vendor's trademark. `--check` now fails on an overlong
   description rather than leaving it for a store to reject.
+- `upload` can address a hidden file input by selector. It only accepted a snapshot ref or the
+  point under the cursor, and a styled drop zone puts the wrapper there rather than the input,
+  so uploading to one failed with `no_file_input`.
 - `edge-bridge screenshot <path>` wrote no file and reported a null path while still exiting 0. It
   read the same wrong key already fixed in the Python and MCP callers; this was the third.
 

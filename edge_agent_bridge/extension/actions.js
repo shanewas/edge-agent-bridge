@@ -309,7 +309,9 @@ export async function execute(cmd) {
         if (relative.length) return fail("bad_params", `upload needs absolute paths, got: ${relative.join(", ")}`);
         const loc = await locate(tabId, p, "upload");
         if (!loc.ok) return loc.result;
-        const mark = await execInTab(tabId, page.pageMarkUpload, [p.ref || null, loc.x, loc.y]);
+        const selector = typeof p.selector === "string" ? p.selector
+          : (typeof p.target === "string" && !/^(f\d+)?e\d+$/.test(p.target) ? p.target : null);
+        const mark = await execInTab(tabId, page.pageMarkUpload, [p.ref || null, loc.x, loc.y, selector]);
         if (!mark || mark.success === false) return mark || fail("no_file_input", "No file input found");
         try {
           const hasDbg = await attach(tabId);

@@ -590,9 +590,18 @@ export function pageSelect(ref, cx, cy, value, label) {
 }
 
 // Find the file input for an upload target and mark it so the worker can address it over CDP.
-export function pageMarkUpload(ref, cx, cy) {
+export function pageMarkUpload(ref, cx, cy, selector) {
   let el = null;
   if (ref && window.__eab && window.__eab.refs) el = window.__eab.refs.get(ref) || null;
+  // A styled drop zone hides the real input, so the point under the cursor is the wrapper, not the
+  // input. When the caller named a selector, honour it before falling back to the hit test.
+  if (!el && selector) {
+    try {
+      el = document.querySelector(selector) || null;
+    } catch (e) {
+      el = null;
+    }
+  }
   if (!el) el = document.elementFromPoint(cx, cy);
   if (!el) return { success: false, code: "target_not_found", error: "No element at point" };
   const isFile = n => n && n.tagName === "INPUT" && (n.getAttribute("type") || "").toLowerCase() === "file";
