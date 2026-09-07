@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Agent Browser Bridge",
   "version": "1.2.1",
-  "description": "Agent Browser Bridge — connects AI coding agents (Antigravity, Claude, Codex, OpenCode, and custom agents) to active browser tabs over RFC 6455 WebSockets and CDP hardware events.",
+  "description": "Agent Browser Bridge connects AI coding agents to active browser tabs over WebSockets and CDP hardware events.",
   "permissions": [
     "tabs",
     "activeTab",
