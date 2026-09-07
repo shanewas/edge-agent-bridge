@@ -5,10 +5,12 @@
 - `scripts/publish_chrome.py` submits the extension to the Chrome Web Store through its v2 API,
   exchanging a refresh token for a bearer token and polling the upload before it submits.
   `release.yml` gained a matching job, so one release can reach both stores.
-- `build_extension.py --store chrome|edge` writes the listing name for that store and a shared
-  description. The old one ran to 169 characters, past Chrome's 132-character limit, and carried
-  another vendor's trademark in a name Chrome would have shown. `--check` now fails on an overlong
-  description rather than leaving it for the store to reject.
+- The extension is named "Agent Browser Bridge", matching the live store listing, and the manifest
+  description was cut to 126 characters. The old one ran to 169, past the 132 the Chrome Web Store
+  accepts, and the name carried another vendor's trademark. `--check` now fails on an overlong
+  description rather than leaving it for a store to reject.
+- `edge-bridge screenshot <path>` wrote no file and reported a null path while still exiting 0. It
+  read the same wrong key already fixed in the Python and MCP callers; this was the third.
 
 ## 2.0.1
 

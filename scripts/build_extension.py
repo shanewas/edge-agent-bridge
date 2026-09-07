@@ -12,11 +12,11 @@ from edge_agent_bridge import __version__  # noqa: E402
 EXT = ROOT / "edge_agent_bridge" / "extension"
 MANIFEST = EXT / "manifest.json"
 
-# Chrome rejects a manifest description over 132 characters, and "Edge" in a Chrome Web Store
-# listing name is someone else's trademark. Same code either way; only these two fields differ.
+# One package serves both stores. The name stays vendor-neutral because "Edge" in a Chrome Web
+# Store listing is someone else's trademark, and Chrome rejects a description over 132 characters.
+NAME = "Agent Browser Bridge"
 DESCRIPTION = ("Let an AI agent drive the browser tabs you already have open, using page snapshots "
                "with stable element refs and trusted input.")
-STORE_NAME = {"edge": "Edge Agent Bridge", "chrome": "Agent Browser Bridge"}
 MAX_DESCRIPTION = 132
 MAX_NAME = 45
 
@@ -26,8 +26,6 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="exit 1 if manifest version differs; write nothing")
     ap.add_argument("--dist", default=str(ROOT / "dist"))
     ap.add_argument("--ext", default=str(EXT), help="extension directory (tests point this at a copy)")
-    ap.add_argument("--store", choices=sorted(STORE_NAME), default="edge",
-                    help="which store listing the package is for (default: edge)")
     args = ap.parse_args()
 
     ext = Path(args.ext)
@@ -44,21 +42,19 @@ def main() -> int:
         print("manifest in sync")
         return 0
 
-    name = STORE_NAME[args.store]
-    if len(name) > MAX_NAME or len(DESCRIPTION) > MAX_DESCRIPTION:
+    if len(NAME) > MAX_NAME or len(DESCRIPTION) > MAX_DESCRIPTION:
         print("name or description exceeds the store limits", file=sys.stderr)
         return 1
 
     manifest["version"] = __version__
-    manifest["name"] = name
+    manifest["name"] = NAME
     manifest["description"] = DESCRIPTION
-    manifest["action"]["default_title"] = name
+    manifest["action"]["default_title"] = NAME
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     dist = Path(args.dist)
     dist.mkdir(parents=True, exist_ok=True)
-    suffix = "" if args.store == "edge" else f"-{args.store}"
-    out = dist / f"edge-agent-bridge-extension{suffix}-{__version__}.zip"
+    out = dist / f"edge-agent-bridge-extension-{__version__}.zip"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(ext.rglob("*")):
             if f.is_file() and "__pycache__" not in f.parts:

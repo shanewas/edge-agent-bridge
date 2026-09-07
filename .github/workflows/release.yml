@@ -115,7 +115,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python scripts/build_extension.py --store chrome
+      - run: python scripts/build_extension.py
       - name: Submit to the Chrome Web Store
         env:
           CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
@@ -124,7 +124,7 @@ jobs:
           CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
           CHROME_ITEM_ID: ${{ secrets.CHROME_ITEM_ID }}
           VERSION: ${{ needs.gate.outputs.version }}
-        run: python scripts/publish_chrome.py "dist/edge-agent-bridge-extension-chrome-$VERSION.zip"
+        run: python scripts/publish_chrome.py "dist/edge-agent-bridge-extension-$VERSION.zip"
 
   github_release:
     needs: [gate, pypi]
