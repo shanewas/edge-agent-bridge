@@ -418,6 +418,71 @@ const PageActions = {
     };
   },
 
+  checkRadio: (selector, text, value) => {
+    let el = null;
+    if (selector) {
+      el = document.querySelector(selector);
+    }
+    if (!el && value !== undefined && value !== null) {
+      el = document.querySelector(`input[type="radio"][value="${value}"], input[type="checkbox"][value="${value}"]`);
+    }
+    if (!el && text) {
+      const lower = text.toLowerCase().trim();
+      const labels = Array.from(document.querySelectorAll("label, [role='radio'], [role='checkbox'], fluent-radio, fluent-checkbox"));
+      const matched = labels.find(l => (l.innerText || "").trim().toLowerCase() === lower || (l.innerText || "").toLowerCase().includes(lower));
+      if (matched) {
+        if (matched.htmlFor) el = document.getElementById(matched.htmlFor);
+        if (!el) el = matched.querySelector("input[type='radio'], input[type='checkbox']");
+        if (!el) el = matched;
+      }
+    }
+    if (!el) {
+      return { success: false, error: `Radio/checkbox element not found: selector="${selector}", text="${text}", value="${value}"` };
+    }
+
+    try { el.scrollIntoView({ behavior: "instant", block: "center" }); } catch (e) {}
+    try { el.focus(); } catch (e) {}
+
+    // 1. If wrapped by or associated with a label, click the label
+    let label = el.closest("label") || (el.id ? document.querySelector(`label[for="${el.id}"]`) : null);
+    if (label && label !== el) {
+      label.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      label.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+      label.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    }
+
+    // 2. Dispatch events on target input
+    const mouseOpts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent("pointerdown", mouseOpts));
+    el.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
+    el.dispatchEvent(new PointerEvent("pointerup", mouseOpts));
+    el.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
+    el.dispatchEvent(new MouseEvent("click", mouseOpts));
+
+    const inputEl = (el.tagName === "INPUT") ? el : el.querySelector("input");
+    if (inputEl) {
+      if (!inputEl.checked) {
+        inputEl.checked = true;
+      }
+      inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+      inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    return {
+      success: true,
+      tag: el.tagName,
+      id: el.id || (inputEl ? inputEl.id : ""),
+      name: el.name || (inputEl ? inputEl.name : ""),
+      value: (inputEl ? inputEl.value : el.value) || "",
+      checked: inputEl ? inputEl.checked : true
+    };
+  },
+
   pressKey: (key) => {
     const el = document.activeElement || document.body;
     const opts = { key, code: key, bubbles: true, cancelable: true, view: window };
@@ -1147,6 +1212,14 @@ async function handleCommand(cmd) {
           }
         }
         return await execInTab(tab.id, PageActions.typeText, [p.selector, text, p.clear !== false]);
+      }
+
+      case "check_radio":
+      case "check":
+      case "select_radio": {
+        const tab = await getTargetTab(p.tabId);
+        if (!tab) return { success: false, error: "No active tab" };
+        return await execInTab(tab.id, PageActions.checkRadio, [p.selector || p.target, p.text, p.value]);
       }
 
       case "key": {

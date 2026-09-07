@@ -116,6 +116,20 @@ class EdgeClient:
         return self.send("get_active_tab")
 
     def tabs(self):
+        # Try direct REST endpoint first if available, fallback to send("list_tabs")
+        try:
+            conn = self._get_connection()
+            conn.request("GET", "/api/tabs", headers={"Connection": "keep-alive"})
+            resp = conn.getresponse()
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            if self._conn:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
         return self.send("list_tabs")
 
     def nav(self, url: str, tab_id: int = None):
@@ -141,6 +155,76 @@ class EdgeClient:
         p = {"target": target, "text": text, "append": append}
         if tab_id: p["tabId"] = tab_id
         return self.send("fill", p)
+
+    def check_radio(self, selector: str = None, text: str = None, value: str = None, tab_id: int = None):
+        p = {}
+        if selector: p["selector"] = selector
+        if text: p["text"] = text
+        if value is not None: p["value"] = str(value)
+        if tab_id: p["tabId"] = tab_id
+        res = self.send("check_radio", p)
+        if not res.get("success") and "Unknown action" in str(res.get("error")):
+            # Fallback for extensions pending reload
+            js = f"""(() => {{
+                let el = null;
+                const sel = {json.dumps(selector or '')};
+                const val = {json.dumps(str(value) if value is not None else '')};
+                const txt = {json.dumps((text or '').lower().strip())};
+                if (sel) el = document.querySelector(sel);
+                if (!el && val) el = document.querySelector(`input[type="radio"][value="${{val}}"], input[type="checkbox"][value="${{val}}"]`);
+                if (!el && txt) {{
+                    const labels = Array.from(document.querySelectorAll("label"));
+                    const m = labels.find(l => (l.innerText || '').trim().toLowerCase().includes(txt));
+                    if (m) el = m.querySelector("input") || m;
+                }}
+                if (!el) return {{ success: false, error: "Element not found" }};
+                const lbl = el.closest("label") || (el.id ? document.querySelector(`label[for="${{el.id}}"]`) : null);
+                if (lbl && lbl !== el) lbl.click();
+                el.click();
+                const inp = (el.tagName === "INPUT") ? el : el.querySelector("input");
+                if (inp) {{
+                    inp.checked = true;
+                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                }}
+                return {{ success: true, checked: true }};
+            }})()"""
+            eval_res = self.eval(js, tab_id=tab_id)
+            if eval_res.get("success") and isinstance(eval_res.get("result"), dict):
+                return eval_res.get("result")
+            return eval_res
+        return res
+
+    def eval(self, code: str, tab_id: int = None, timeout: float = 15.0):
+        # Try direct REST POST /api/eval if available
+        try:
+            conn = self._get_connection()
+            body = json.dumps({"code": code, "tabId": tab_id, "timeout": timeout}).encode("utf-8")
+            conn.request("POST", "/api/eval", body=body, headers={
+                "Content-Type": "application/json",
+                "Connection": "keep-alive"
+            })
+            resp = conn.getresponse()
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            if self._conn:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+        p = {"code": code}
+        if tab_id: p["tabId"] = tab_id
+        return self.send("eval", p, timeout=int(timeout))
+
+    def wait_for_eval(self, code: str, timeout: float = 10.0, interval: float = 0.2, tab_id: int = None):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            res = self.eval(code, tab_id=tab_id, timeout=min(5.0, timeout))
+            if res.get("success") and res.get("result"):
+                return {"success": True, "result": res.get("result")}
+            time.sleep(interval)
+        return {"success": False, "error": f"Condition not met within {timeout}s: {code}"}
 
     def snapshot(self, tab_id=None):
         p = {}
@@ -376,6 +460,35 @@ def cmd_fill(target: str, text: str, append: bool = False, tab_id: int = None):
         print(f"Filled '{text}' into '{target}'{native_flag} in {elapsed}ms")
     else:
         print(f"Fill failed: {res.get('error')} ({elapsed}ms)")
+
+def cmd_check_radio(target: str = None, selector: str = None, text: str = None, value: str = None, tab_id: int = None):
+    t0 = time.time()
+    params = {}
+    if selector: params["selector"] = selector
+    elif target: params["target"] = target
+    if text: params["text"] = text
+    if value is not None: params["value"] = str(value)
+    if tab_id is not None: params["tabId"] = tab_id
+    res = send_cmd("check_radio", params)
+    elapsed = round((time.time() - t0) * 1000, 1)
+    if res.get("success"):
+        desc = selector or target or text or f"value={value}"
+        print(f"Checked radio/checkbox '{desc}' in {elapsed}ms")
+    else:
+        print(f"Check radio/checkbox failed: {res.get('error')} ({elapsed}ms)")
+
+def cmd_wait_eval(code: str, timeout: float = 10.0, tab_id: int = None):
+    t0 = time.time()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        res = send_cmd("eval", {"code": code, "tabId": tab_id}, timeout=int(min(5.0, timeout)))
+        if res.get("success") and res.get("result"):
+            elapsed = round((time.time() - t0) * 1000, 1)
+            print(f"Condition '{code}' met: {json.dumps(res.get('result'))} in {elapsed}ms")
+            return
+        time.sleep(0.2)
+    elapsed = round((time.time() - t0) * 1000, 1)
+    print(f"Condition '{code}' timed out after {elapsed}ms")
 
 def cmd_wait(target: str, timeout: int = 5000, tab_id: int = None):
     t0 = time.time()
@@ -711,6 +824,15 @@ class Edge:
             params["tabId"] = self.tab_id
         return send_cmd("fill", params)
 
+    def check_radio(self, selector: str = None, text: str = None, value: str = None) -> dict:
+        params = {}
+        if selector: params["selector"] = selector
+        if text: params["text"] = text
+        if value is not None: params["value"] = str(value)
+        if self.tab_id is not None:
+            params["tabId"] = self.tab_id
+        return send_cmd("check_radio", params)
+
     def text(self, target: str) -> str:
         params = {"target": target}
         if self.tab_id is not None:
@@ -758,6 +880,15 @@ class Edge:
         if self.tab_id is not None:
             params["tabId"] = self.tab_id
         return send_cmd("eval", params)
+
+    def wait_for_eval(self, code: str, timeout: float = 10.0, interval: float = 0.2) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            res = self.eval(code)
+            if res.get("success") and res.get("result"):
+                return {"success": True, "result": res.get("result")}
+            time.sleep(interval)
+        return {"success": False, "error": f"Condition not met within {timeout}s: {code}"}
 
     def screenshot(self, output_file: str = "screenshot.png") -> str:
         cmd_screenshot(output_file, tab_id=self.tab_id)
@@ -907,6 +1038,18 @@ def main():
     p_fill.add_argument("--append", action="store_true", help="Append instead of replace")
     p_fill.add_argument("--tab", "-t", type=int, help="Target tab ID")
 
+    p_check = sub.add_parser("check-radio", help="Check radio button or checkbox with full event dispatch")
+    p_check.add_argument("target", nargs="?", default=None, help="Label text, selector, or target")
+    p_check.add_argument("--selector", "-s", help="CSS selector")
+    p_check.add_argument("--text", help="Label text")
+    p_check.add_argument("--value", "-v", help="Input value attribute")
+    p_check.add_argument("--tab", "-t", type=int, help="Target tab ID")
+
+    p_wait_eval = sub.add_parser("wait-eval", help="Wait for JavaScript expression to become truthy")
+    p_wait_eval.add_argument("code", help="JavaScript expression (e.g. 'document.querySelector(\".ready\") !== null')")
+    p_wait_eval.add_argument("--timeout", type=float, default=10.0, help="Timeout in seconds (default: 10.0)")
+    p_wait_eval.add_argument("--tab", "-t", type=int, help="Target tab ID")
+
     p_wait = sub.add_parser("wait", help="Wait for target element to appear in DOM and be visible")
     p_wait.add_argument("target", help="Target text, label, or selector")
     p_wait.add_argument("--timeout", type=int, default=5000, help="Timeout in ms (default: 5000)")
@@ -1006,6 +1149,10 @@ def main():
         cmd_drag(from_target=args.from_target, to_target=args.to_target, from_x=args.from_x, from_y=args.from_y, to_x=args.to_x, to_y=args.to_y, steps=args.steps, tab_id=args.tab)
     elif args.subcmd == "fill":
         cmd_fill(target=args.target, text=args.text, append=args.append, tab_id=args.tab)
+    elif args.subcmd == "check-radio":
+        cmd_check_radio(target=args.target, selector=args.selector, text=args.text, value=args.value, tab_id=args.tab)
+    elif args.subcmd == "wait-eval":
+        cmd_wait_eval(args.code, timeout=args.timeout, tab_id=args.tab)
     elif args.subcmd == "wait":
         cmd_wait(target=args.target, timeout=args.timeout, tab_id=args.tab)
     elif args.subcmd == "key":

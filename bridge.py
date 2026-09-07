@@ -8,6 +8,8 @@ import base64
 import hashlib
 import http.server
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import queue
 import struct
 import threading
@@ -15,6 +17,15 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+
+# Setup rotating log handler (max 5 MB, 3 backups)
+LOG_FILE = Path(__file__).parent / "bridge.log"
+logger = logging.getLogger("edge_bridge")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    _handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
+    logger.addHandler(_handler)
 
 PORT = 18999
 HOST = "127.0.0.1"
@@ -91,9 +102,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     timeout = 30
 
     def log_message(self, format, *args):
-        log_file = Path(__file__).parent / "bridge.log"
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{self.log_date_time_string()}] {self.address_string()} {format % args}\n")
+        logger.info(f"{self.address_string()} {format % args}")
 
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -135,6 +144,39 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self._respond(200)
+
+    def _dispatch_command(self, action: str, params: dict = None, timeout: float = 15.0):
+        timeout = max(1.0, min(timeout, MAX_EXEC_TIMEOUT))
+        cmd_id = str(uuid.uuid4())
+        event = threading.Event()
+        with state_lock:
+            pending_responses[cmd_id] = event
+
+        cmd_payload = {
+            "id": cmd_id,
+            "action": action,
+            "params": params or {}
+        }
+
+        # Attempt instant dispatch via WebSocket if connected
+        dispatched_ws = False
+        with ws_lock:
+            ws = active_extension_ws if (active_extension_ws and not active_extension_ws.closed) else None
+            if ws:
+                dispatched_ws = ws.send_text(json.dumps(cmd_payload))
+
+        if not dispatched_ws:
+            command_queue.put(cmd_payload)
+
+        finished = event.wait(timeout=timeout)
+
+        with state_lock:
+            pending_responses.pop(cmd_id, None)
+            res = response_data.pop(cmd_id, None)
+            if res is None:
+                abandoned_commands.add(cmd_id)
+
+        return finished, res
 
     def _handle_result_payload(self, data):
         """Process a result dict from either GET ?d=, POST body, or WebSocket frame."""
@@ -307,7 +349,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 command_queue.put(cmd)
                 raise
 
-        elif self.path.startswith("/status"):
+        elif self.path.startswith("/api/tabs"):
+            self._mark_seen()
+            finished, res = self._dispatch_command("list_tabs", {}, timeout=10)
+            if finished and res is not None:
+                self._respond(200, res)
+            else:
+                self._respond(504, {"success": False, "error": "Timed out waiting for tabs"})
+
+        elif self.path.startswith("/status") or self.path.startswith("/api/status"):
             # Status check — connected if pinged in last 30s or WebSocket active
             connected = (time.time() - last_extension_ping) < 30
             with ws_lock:
@@ -366,14 +416,41 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_result_payload(data)
             self._respond(200, {"ok": True})
 
+        elif self.path.startswith("/api/eval"):
+            # Direct REST evaluation endpoint (strictly local processes only)
+            req, err = self._read_body()
+            if self._is_browser_request():
+                self._respond(403, {"success": False, "error": "/api/eval is not reachable from browser context"}, cors=False)
+                return
+
+            if err is not None:
+                self._respond(400, {"success": False, "error": err}, cors=False)
+                return
+
+            code = req.get("code")
+            if not code:
+                self._respond(400, {"success": False, "error": "Missing 'code' parameter"}, cors=False)
+                return
+
+            tab_id = req.get("tabId")
+            timeout = float(req.get("timeout", 15))
+            finished, res = self._dispatch_command("eval", {"code": code, "tabId": tab_id}, timeout=timeout)
+            if finished and res is not None:
+                self._respond(200, res, cors=False)
+            else:
+                self._respond(504, {
+                    "success": False,
+                    "error": "Command timed out waiting for Edge extension response"
+                }, cors=False)
+
         elif self.path.startswith("/exec"):
             # Agent sending command to be executed in Edge. Local processes
             # only — never page script.
+            req, err = self._read_body()
             if self._is_browser_request():
                 self._respond(403, {"success": False, "error": "/exec is not reachable from browser context"}, cors=False)
                 return
 
-            req, err = self._read_body()
             if err is not None:
                 self._respond(400, {"success": False, "error": err}, cors=False)
                 return
@@ -382,39 +459,8 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 timeout = float(req.get("timeout", 15))
             except (TypeError, ValueError):
                 timeout = 15
-            timeout = max(1.0, min(timeout, MAX_EXEC_TIMEOUT))
 
-            cmd_id = str(uuid.uuid4())
-            event = threading.Event()
-            with state_lock:
-                pending_responses[cmd_id] = event
-
-            cmd_payload = {
-                "id": cmd_id,
-                "action": req.get("action"),
-                "params": req.get("params", {})
-            }
-
-            # Attempt instant dispatch via WebSocket if connected
-            dispatched_ws = False
-            with ws_lock:
-                ws = active_extension_ws if (active_extension_ws and not active_extension_ws.closed) else None
-                if ws:
-                    dispatched_ws = ws.send_text(json.dumps(cmd_payload))
-
-            if not dispatched_ws:
-                command_queue.put(cmd_payload)
-
-            finished = event.wait(timeout=timeout)
-
-            with state_lock:
-                pending_responses.pop(cmd_id, None)
-                res = response_data.pop(cmd_id, None)
-                if res is None:
-                    # Nothing came back. The command may still be sitting in the
-                    # queue; tag it so a later poll discards rather than replays it.
-                    abandoned_commands.add(cmd_id)
-
+            finished, res = self._dispatch_command(req.get("action"), req.get("params", {}), timeout=timeout)
             if finished and res is not None:
                 self._respond(200, res, cors=False)
             else:
@@ -433,16 +479,13 @@ class BridgeServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = False
 
 def run_server():
-    log_file = Path(__file__).parent / "bridge.log"
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"[{time.strftime('%X')}] Starting server on {HOST}:{PORT}\n")
+    logger.info(f"Starting server on {HOST}:{PORT}")
     try:
         server = BridgeServer((HOST, PORT), BridgeRequestHandler)
         server.serve_forever()
     except Exception as e:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%X')}] Server crashed: {e}\n")
-            traceback.print_exc(file=f)
+        logger.error(f"Server crashed: {e}")
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     run_server()
