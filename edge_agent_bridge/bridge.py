@@ -566,7 +566,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
 class BridgeServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    allow_reuse_address = True
 
     def __init__(self, server_address, RequestHandlerClass, state: BridgeState):
         self.state = state

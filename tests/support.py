@@ -113,4 +113,5 @@ class DaemonHandle:
 
     def restart(self):
         self.stop()
+        time.sleep(0.2)
         return self.start()
