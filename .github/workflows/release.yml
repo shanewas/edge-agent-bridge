@@ -59,7 +59,7 @@ jobs:
             echo "changed=$FORCED" >> "$GITHUB_OUTPUT"
           elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- edge_agent_bridge/extension; then
+          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- ':(exclude)edge_agent_bridge/extension/manifest.json' edge_agent_bridge/extension; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"

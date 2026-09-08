@@ -518,8 +518,8 @@ def main(argv=None) -> int:
     res = edge.send(action, params)
 
     # If screenshot with path, save file
-    if action == "screenshot" and getattr(args, "path", None) and res.get("success") and res.get("data"):
-        data_str = res["data"]
+    if action == "screenshot" and getattr(args, "path", None) and res.get("success") and (res.get("dataUrl") or res.get("data")):
+        data_str = res.get("dataUrl") or res["data"]
         if "," in data_str:
             data_str = data_str.split(",", 1)[1]
         import base64

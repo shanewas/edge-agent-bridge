@@ -66,3 +66,13 @@ def test_cli_status_human_contains_extension_and_version(daemon, fake_ext):
     assert code == 0
     assert "Extension:" in out
     assert fake_ext.version in out
+
+
+def test_cli_screenshot_writes_the_file(daemon, fake_ext, tmp_path):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    out_file = tmp_path / "shot.jpg"
+    code, out, err = run_cli(["--json", "screenshot", str(out_file)], env=env)
+    assert code == 0, err
+    data = json.loads(out)
+    assert data["path"] == str(out_file.resolve())
+    assert out_file.exists() and out_file.stat().st_size > 0

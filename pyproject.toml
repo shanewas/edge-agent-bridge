@@ -37,6 +37,7 @@ Homepage = "https://github.com/shanewas/edge-agent-bridge"
 Repository = "https://github.com/shanewas/edge-agent-bridge"
 Issues = "https://github.com/shanewas/edge-agent-bridge/issues"
 Funding = "https://github.com/sponsors/shanewas"
+"Microsoft Edge Add-on" = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
 
 [project.scripts]
 edge-bridge = "edge_agent_bridge.cli:main"

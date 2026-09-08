@@ -1,14 +1,14 @@
 # Changelog
 
-## Unreleased
+## 2.0.2
 
+- Direct link to the Microsoft Edge Add-ons store listing (`Agent Browser Bridge`) added to `README.md`, `pyproject.toml` URLs, and package metadata.
+- `edge-bridge screenshot <path>` now saves the file when given a destination path.
+- `release.yml` distinguishes package-only bumps from extension changes, skipping redundant store submissions when only Python files change.
 - `scripts/publish_chrome.py` submits the extension to the Chrome Web Store through its v2 API,
   exchanging a refresh token for a bearer token and polling the upload before it submits.
-  `release.yml` gained a matching job, so one release can reach both stores.
-- `build_extension.py --store chrome|edge` writes the listing name for that store and a shared
-  description. The old one ran to 169 characters, past Chrome's 132-character limit, and carried
-  another vendor's trademark in a name Chrome would have shown. `--check` now fails on an overlong
-  description rather than leaving it for the store to reject.
+- `build_extension.py --store chrome|edge` writes the listing name for each store and a shared
+  description within the 132-character Chrome limit. `--check` enforces length limits at build time.
 
 ## 2.0.1
 
