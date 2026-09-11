@@ -72,18 +72,22 @@ class DaemonHandle:
     def status(self):
         return self._request("GET", "/status")[1]
 
-    def exec(self, action, params=None, timeout=5, token="auto", headers=None):
+    def exec(self, action, params=None, timeout=5, token="auto", headers=None, session_token=None):
         h = dict(headers or {})
         if token == "auto":
             h[config.TOKEN_HEADER] = self.token
         elif token is not None:
             h[config.TOKEN_HEADER] = token
-        return self._request("POST", "/exec", {"action": action, "params": params or {}, "timeout": timeout},
-                             headers=h, timeout=timeout + 5)
+        body = {"action": action, "params": params or {}, "timeout": timeout}
+        if session_token is not None:
+            body["sessionToken"] = session_token
+        return self._request("POST", "/exec", body, headers=h, timeout=timeout + 5)
 
-    def start(self):
+    def start(self, extra_env=None):
         env = dict(os.environ, EDGE_BRIDGE_HOME=str(self.home), EDGE_BRIDGE_PORT=str(self.port),
                    EDGE_BRIDGE_HEARTBEAT="1", EDGE_BRIDGE_PONG_TIMEOUT="3", PYTHONUNBUFFERED="1")
+        if extra_env:
+            env.update(extra_env)
         self.proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "edge_agent_bridge.bridge", "--port", str(self.port)],
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

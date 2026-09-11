@@ -28,6 +28,15 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_BODY_BYTES = 16 * 1024 * 1024  # 16 MB
 MAX_FRAME_PAYLOAD = 16 * 1024 * 1024  # 16 MB
 
+LOCK_EXEMPT_ACTIONS = frozenset({
+    "ping", "status", "tabs", "daemon", "session_start",
+    "session_status", "session_stop", "mcp-config", "extension",
+})
+PIN_MUTATING_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
+CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})
+DISPATCH_BUDGET_SEC = 12.0
+LOCK_IDLE_EVICT_SEC = 3600.0
+
 logger = logging.getLogger("edge_bridge")
 
 
@@ -111,7 +120,8 @@ class HeldCommand:
 
 class BridgeState:
     def __init__(self, port: int, home: Path, token: str, pairing_required: bool = False,
-                 heartbeat_sec: float = 20.0, pong_timeout_sec: float = 45.0):
+                 heartbeat_sec: float = 20.0, pong_timeout_sec: float = 45.0,
+                 lock_timeout_sec: float = 10.0):
         self.port = port
         self.home = home
         self.token = token
@@ -128,6 +138,9 @@ class BridgeState:
         self.held: collections.deque[HeldCommand] = collections.deque()
         self.pending: dict[str, threading.Event] = {}
         self.results: dict[str, dict] = {}
+        self.lock_timeout_sec = lock_timeout_sec
+        self.sessions: dict[str, dict] = {}
+        self.tab_locks: dict[int, list] = {}
 
         self.last_seen: float = 0.0
         self.last_pong: float = 0.0
@@ -169,6 +182,26 @@ class BridgeState:
                     self._grace_timer.cancel()
                     self._grace_timer = None
 
+    def session_create_locked(self) -> str:
+        token = str(uuid.uuid4())
+        self.sessions[token] = {"tabId": None, "tabClosed": False, "warned": set()}
+        return token
+
+    def tab_lock_locked(self, tab_id: int) -> threading.Lock:
+        now = time.monotonic()
+        entry = self.tab_locks.get(tab_id)
+        if entry is None:
+            for tid, (_, used) in list(self.tab_locks.items()):
+                if now - used > LOCK_IDLE_EVICT_SEC:
+                    del self.tab_locks[tid]
+            entry = [threading.Lock(), now]
+            self.tab_locks[tab_id] = entry
+        entry[1] = now
+        return entry[0]
+
+    def tab_lock_evict_locked(self, tab_id: int) -> None:
+        self.tab_locks.pop(tab_id, None)
+
 
 def _heartbeat_worker(state: BridgeState, stop_event: threading.Event):
     while not stop_event.is_set():
@@ -190,6 +223,16 @@ def _heartbeat_worker(state: BridgeState, stop_event: threading.Event):
             state.on_ws_closed(to_close)
 
 
+def _strip_session_token(obj) -> None:
+    if isinstance(obj, dict):
+        obj.pop("sessionToken", None)
+        for v in obj.values():
+            _strip_session_token(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _strip_session_token(v)
+
+
 class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
@@ -197,7 +240,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.info("%s %s", self.address_string(), format % args)
 
-    def _respond(self, status: int, data: dict | list | None = None):
+    def _respond(self, status: int, data: dict | list | None = None) -> bool:
         body = json.dumps(data).encode("utf-8") if data is not None else b""
         try:
             self.send_response(status)
@@ -208,8 +251,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             if body:
                 self.wfile.write(body)
                 self.wfile.flush()
+            return True
         except OSError:
-            pass
+            return False
 
     def _check_host(self) -> bool:
         host_header = self.headers.get("Host", "")
@@ -274,6 +318,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 ext_ver = state.ext_version
                 ext_outdated = state.extension_outdated
                 pending_count = len(state.pending) + len(state.held)
+                session_count = len(state.sessions)
                 last_seen = state.last_seen
 
             self._respond(200, {
@@ -285,6 +330,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "websocket_active": ws_active,
                 "last_seen_seconds_ago": round(time.time() - last_seen, 1) if last_seen > 0 else None,
                 "pending": pending_count,
+                "sessions": session_count,
                 "pairing_required": state.pairing_required,
             })
             return
@@ -501,59 +547,64 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             params = req.get("params") or {}
+            if not isinstance(params, dict):
+                self._respond(400, {"success": False, "code": "bad_body", "error": "params must be an object"})
+                return
             try:
                 timeout = float(req.get("timeout", 20))
             except (TypeError, ValueError):
                 timeout = 20.0
             timeout = max(1.0, min(timeout, 120.0))
+            session_token = req.get("sessionToken")
 
-            cmd_id = str(uuid.uuid4())
-            event = threading.Event()
-            deadline = time.time() + timeout
-            cmd_payload = {
-                "id": cmd_id,
-                "action": action,
-                "params": params
-            }
+            if action == "session_start":
+                with state.lock:
+                    token = state.session_create_locked()
+                self._respond(200, {"success": True, "sessionToken": token})
+                return
 
-            with state.lock:
-                if state.ext and not state.ext.closed and state.ext_accepted:
-                    state.pending[cmd_id] = event
-                    sent = state.ext.send_text(json.dumps(cmd_payload))
-                    if not sent:
-                        state.pending.pop(cmd_id, None)
-                        held_cmd = HeldCommand(cmd_id, cmd_payload, event, deadline)
-                        state.held.append(held_cmd)
-                else:
-                    held_cmd = HeldCommand(cmd_id, cmd_payload, event, deadline)
-                    state.held.append(held_cmd)
-
-            rem = max(0.01, deadline - time.time())
-            finished = event.wait(timeout=rem)
-
-            with state.lock:
-                if finished:
-                    res = state.results.pop(cmd_id, None)
-                    if res is not None:
-                        self._respond(200, res)
+            if action in ("session_status", "session_stop"):
+                with state.lock:
+                    sess = state.sessions.get(session_token) if session_token else None
+                    if sess is None:
+                        self._respond(200, {"success": False, "code": "unknown_session",
+                                            "error": "Unknown or expired sessionToken. Mint one with session_start."})
                         return
-
-                for h in list(state.held):
-                    if h.id == cmd_id:
-                        state.held.remove(h)
-                        self._respond(504, {
-                            "success": False,
-                            "code": "extension_offline",
-                            "error": "Edge extension is not connected. Open Edge and check the Edge Agent Bridge popup shows Connected."
-                        })
+                    if action == "session_stop":
+                        del state.sessions[session_token]
+                        self._respond(200, {"success": True, "stopped": True})
                         return
+                    self._respond(200, {"success": True, "tabId": sess["tabId"], "tabClosed": sess["tabClosed"]})
+                    return
 
-                state.pending.pop(cmd_id, None)
-                self._respond(504, {
-                    "success": False,
-                    "code": "timeout",
-                    "error": "Command timed out waiting for Edge extension response"
-                })
+            session = None
+            if session_token is not None:
+                with state.lock:
+                    session = state.sessions.get(session_token)
+                if session is None:
+                    self._respond(200, {"success": False, "code": "unknown_session",
+                                        "error": "Unknown or expired sessionToken. Mint one with session_start."})
+                    return
+
+            tab_scoped = action not in LOCK_EXEMPT_ACTIONS
+            if session is not None and tab_scoped and action not in PIN_MUTATING_ACTIONS:
+                with state.lock:
+                    closed = session["tabClosed"]
+                if closed:
+                    self._respond(200, {"success": False, "code": "tab_closed",
+                                        "error": "Session tab is closed. Use switch or new to re-pin."})
+                    return
+
+            if action == "batch":
+                self._exec_batch(state, session_token, session, params, timeout)
+                return
+
+            _strip_session_token(params)
+            forward_tab = self._resolve_forward_tab(state, session, params, tab_scoped)
+            res, status_code = self._dispatch_guarded(state, action, params, timeout, tab_scoped, forward_tab)
+            self._after_result(state, session_token, session, action, params, forward_tab, res)
+            if not self._respond(status_code, res):
+                self._best_effort_cancel(state, getattr(self, "_last_cmd_id", None))
             return
 
         if self.path.startswith("/poll") or self.path.startswith("/result"):
@@ -562,6 +613,137 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self._respond(404, {"success": False, "code": "not_found", "error": "Unknown path"})
 
+    def _resolve_forward_tab(self, state, session, params, tab_scoped):
+        if not tab_scoped:
+            return None
+        explicit = params.get("tabId")
+        if explicit is not None:
+            try:
+                return int(explicit)
+            except (TypeError, ValueError):
+                return None
+        if session is not None:
+            with state.lock:
+                pin = session["tabId"]
+            if pin is not None:
+                params["tabId"] = pin
+                return int(pin)
+        return None
+
+    def _dispatch_guarded(self, state, action, params, timeout, tab_scoped, forward_tab):
+        tab_lock = None
+        if forward_tab is not None:
+            with state.lock:
+                tab_lock = state.tab_lock_locked(forward_tab)
+            if not tab_lock.acquire(timeout=state.lock_timeout_sec):
+                return ({"success": False, "code": "tab_busy", "tabId": forward_tab,
+                         "error": f"Tab {forward_tab} is busy; another call holds its lock"}, 200)
+        try:
+            return self._dispatch_once(state, action, params, timeout, tab_scoped)
+        finally:
+            if tab_lock is not None:
+                tab_lock.release()
+
+    def _dispatch_once(self, state, action, params, timeout, tab_scoped):
+        fwd_params = dict(params)
+        if tab_scoped:
+            fwd_params["deadlineMs"] = int((time.time() + DISPATCH_BUDGET_SEC) * 1000)
+        cmd_id = str(uuid.uuid4())
+        self._last_cmd_id = cmd_id
+        event = threading.Event()
+        deadline = time.time() + timeout
+        cmd_payload = {"id": cmd_id, "action": action, "params": fwd_params}
+        with state.lock:
+            live = bool(state.ext and not state.ext.closed and state.ext_accepted)
+            if live:
+                state.pending[cmd_id] = event
+                if not state.ext.send_text(json.dumps(cmd_payload)):
+                    state.pending.pop(cmd_id, None)
+                    live = False
+        if not live:
+            return ({"success": False, "code": "extension_offline",
+                     "error": "Edge extension is not connected. Open Edge and check the Edge Agent Bridge popup shows Connected."}, 504)
+        rem = max(0.01, deadline - time.time())
+        finished = event.wait(timeout=rem)
+        with state.lock:
+            if finished:
+                res = state.results.pop(cmd_id, None)
+                if res is not None:
+                    return (res, 200)
+            state.pending.pop(cmd_id, None)
+            return ({"success": False, "code": "timeout",
+                     "error": "Command timed out waiting for Edge extension response"}, 504)
+
+    def _after_result(self, state, session_token, session, action, params, forward_tab, res):
+        if not isinstance(res, dict):
+            return
+        if forward_tab is not None and (res.get("code") == "tab_not_found"
+                                        or (action in CLOSING_ACTIONS and res.get("success"))):
+            with state.lock:
+                state.tab_lock_evict_locked(forward_tab)
+        if session is None or session_token is None:
+            return
+        with state.lock:
+            sess = state.sessions.get(session_token)
+            if sess is None:
+                return
+            tab_info = res.get("tab") if isinstance(res.get("tab"), dict) else None
+            if action in PIN_MUTATING_ACTIONS and res.get("success") and tab_info is not None \
+                    and tab_info.get("id") is not None:
+                sess["tabId"] = int(tab_info["id"])
+                sess["tabClosed"] = False
+            elif sess.get("tabId") is None and res.get("success") and tab_info is not None \
+                    and tab_info.get("id") is not None:
+                sess["tabId"] = int(tab_info["id"])
+            if forward_tab is not None and forward_tab == sess.get("tabId"):
+                if res.get("code") == "tab_not_found" \
+                        or (action in CLOSING_ACTIONS and res.get("success")):
+                    sess["tabClosed"] = True
+                    if "tab_closed" not in sess["warned"]:
+                        sess["warned"].add("tab_closed")
+                        logger.warning("Session tab %s closed; session is now sticky tab_closed", forward_tab)
+
+    def _best_effort_cancel(self, state, cmd_id):
+        if not cmd_id:
+            return
+        try:
+            with state.lock:
+                ws = state.ext
+            if ws and not ws.closed:
+                ws.send_text(json.dumps({"cancel": cmd_id}))
+        except Exception:
+            pass
+
+    def _exec_batch(self, state, session_token, session, params, timeout):
+        steps = params.get("steps") or []
+        _strip_session_token(params)
+        results = []
+        top_tab = params.get("tabId")
+        per_step_timeout = max(1.0, timeout / max(1, len(steps)))
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            s_action = step.get("action")
+            if s_action in ("sleep", "wait_ms"):
+                try:
+                    time.sleep(max(0.0, float(step.get("ms", 100)) / 1000.0))
+                except (TypeError, ValueError):
+                    pass
+                results.append({"action": "sleep", "success": True, "ms": step.get("ms", 100)})
+                continue
+            s_params = {k: v for k, v in step.items() if k != "action"}
+            if "tabId" not in s_params and top_tab is not None:
+                s_params["tabId"] = top_tab
+            s_tab_scoped = s_action not in LOCK_EXEMPT_ACTIONS
+            forward_tab = self._resolve_forward_tab(state, session, s_params, s_tab_scoped)
+            res, _ = self._dispatch_guarded(state, s_action, s_params, per_step_timeout, s_tab_scoped, forward_tab)
+            self._after_result(state, session_token, session, s_action, s_params, forward_tab, res)
+            results.append(res)
+            if res and res.get("success") is False and step.get("stopOnError", True) is not False:
+                self._respond(200, {"success": False, "code": res.get("code") or "step_failed",
+                                    "error": res.get("error"), "stoppedAt": s_action, "results": results})
+                return
+        self._respond(200, {"success": True, "count": len(results), "results": results})
 
 
 class BridgeServer(http.server.ThreadingHTTPServer):
@@ -595,6 +777,7 @@ def run_server(host="127.0.0.1", port=None, home=None, require_pairing=None) -> 
         pairing_required=require_pairing,
         heartbeat_sec=config.heartbeat_seconds(),
         pong_timeout_sec=config.pong_timeout_seconds(),
+        lock_timeout_sec=config.lock_timeout_seconds(),
     )
 
     stop_event = threading.Event()

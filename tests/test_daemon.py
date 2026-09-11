@@ -107,28 +107,14 @@ def test_oversized_frame_closes_1009(daemon):
     assert op == 8 and struct.unpack("!H", payload[:2])[0] == 1009
 
 
-def test_held_commands_drain_in_order_after_hello(daemon):
-    order = []
-
-    def handler(action, params):
-        order.append(params.get("n"))
-        return {"success": True}
-
-    results = []
-
-    def call(n):
-        results.append(daemon.exec("noop", {"n": n}, timeout=6))
-
-    threads = [threading.Thread(target=call, args=(i,)) for i in range(3)]
-    for t in threads:
-        t.start()
-        time.sleep(0.15)   # arrival order 0,1,2 while offline
-    time.sleep(0.3)
-    ext = FakeExtension(daemon.port, handler=handler).connect().run()
-    for t in threads:
-        t.join(timeout=10)
-    assert order == [0, 1, 2]
-    assert all(code == 200 for code, _ in results)
+def test_offline_fails_fast_then_succeeds_after_connect(daemon):
+    start = time.time()
+    code, body = daemon.exec("ping", timeout=6)
+    assert code == 504 and body["code"] == "extension_offline"
+    assert time.time() - start < 2.0
+    ext = FakeExtension(daemon.port).connect().run()
+    code, body = daemon.exec("ping", timeout=6)
+    assert code == 200 and body["success"] is True
     ext.close()
 
 
@@ -138,18 +124,13 @@ def test_offline_command_times_out_with_extension_offline(daemon):
     assert daemon.status()["pending"] == 0
 
 
-def test_grace_drain_without_hello_when_pairing_off(daemon):
-    got = []
-
-    def call():
-        got.append(daemon.exec("ping", timeout=6))
-
-    t = threading.Thread(target=call)
-    t.start()
-    time.sleep(0.2)
+def test_unaccepted_socket_fails_fast_until_grace_passes(daemon):
     ext = FakeExtension(daemon.port, send_hello=False, version="1.1.2").connect().run()
-    t.join(timeout=10)
-    assert got and got[0][0] == 200
+    code, body = daemon.exec("ping", timeout=6)
+    assert code == 504 and body["code"] == "extension_offline"
+    time.sleep(1.2)   # pairing-off grace timer accepts the socket
+    code, body = daemon.exec("ping", timeout=6)
+    assert code == 200 and body["success"] is True
     ext.close()
 
 

@@ -1,7 +1,7 @@
 """Paths, port and token shared by daemon and clients.
 
 Test-only knobs: EDGE_BRIDGE_PORT, EDGE_BRIDGE_HOME, EDGE_BRIDGE_HEARTBEAT (seconds),
-EDGE_BRIDGE_PONG_TIMEOUT (seconds). The extension itself always talks to 18999.
+EDGE_BRIDGE_PONG_TIMEOUT (seconds), EDGE_BRIDGE_LOCK_TIMEOUT (seconds). The extension itself always talks to 18999.
 """
 import os
 import secrets
@@ -45,6 +45,10 @@ def heartbeat_seconds() -> float:
 
 def pong_timeout_seconds() -> float:
     return _float_env("EDGE_BRIDGE_PONG_TIMEOUT", 45.0)
+
+
+def lock_timeout_seconds() -> float:
+    return _float_env("EDGE_BRIDGE_LOCK_TIMEOUT", 10.0)
 
 
 def extension_dir() -> Path:

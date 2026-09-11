@@ -1,0 +1,158 @@
+import time
+from tests.fake_extension import FakeExtension
+
+
+def test_session_start_status_stop_roundtrip(daemon):
+    code, body = daemon.exec("session_start", session_token=None)
+    assert code == 200 and body["success"] is True
+    token = body["sessionToken"]
+    assert isinstance(token, str) and len(token) >= 32
+    code, st = daemon.exec("session_status", session_token=token)
+    assert code == 200 and st["success"] is True and st["tabId"] is None and st["tabClosed"] is False
+    code, stop = daemon.exec("session_stop", session_token=token)
+    assert code == 200 and stop["success"] is True
+    code, st2 = daemon.exec("session_status", session_token=token)
+    assert code == 200 and st2["code"] == "unknown_session"
+
+
+def test_unknown_token_rejected_never_unpinned(daemon, fake_ext):
+    n_before = len(fake_ext.received)
+    code, body = daemon.exec("click", {"target": "x"}, session_token="bogus-token")
+    assert code == 200 and body["code"] == "unknown_session"
+    assert len(fake_ext.received) == n_before
+
+
+def test_pin_inject_and_one_shot_override(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        tid = params.get("tabId", 5)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    _, start = daemon.exec("session_start")
+    token = start["sessionToken"]
+    _, sw = daemon.exec("tab_switch", {"tabId": 5}, session_token=token)
+    assert sw["success"] is True
+    _, st = daemon.exec("session_status", session_token=token)
+    assert st["tabId"] == 5
+    daemon.exec("click", {"target": "b"}, session_token=token)
+    assert seen[-1][1].get("tabId") == 5
+    daemon.exec("click", {"target": "b", "tabId": 9}, session_token=token)
+    assert seen[-1][1].get("tabId") == 9
+    _, st2 = daemon.exec("session_status", session_token=token)
+    assert st2["tabId"] == 5
+    ext.close()
+
+
+def test_tokenless_legacy_unchanged(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append(dict(params))
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    daemon.exec("click", {"target": "b", "tabId": 3})
+    assert seen[-1].get("tabId") == 3
+    daemon.exec("click", {"target": "b"})
+    assert "tabId" not in seen[-1]
+    ext.close()
+
+
+def test_session_token_stripped_before_forward(daemon, fake_ext):
+    daemon.exec("click", {"target": "b", "sessionToken": "smuggled"})
+    fwd = [m for m in fake_ext.received if m.get("action") == "click"][-1]
+    assert "sessionToken" not in fwd.get("params", {})
+    assert "sessionToken" not in fwd
+
+
+def test_tab_closed_sticky_until_switch(daemon):
+    def handler(action, params):
+        if action in ("tab_switch", "switch_tab"):
+            tid = params.get("tabId", 7)
+            return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+        if params.get("tabId") == 5:
+            return {"success": False, "code": "tab_not_found", "error": "Tab 5 no longer exists"}
+        tid = params.get("tabId", 7)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    _, start = daemon.exec("session_start")
+    token = start["sessionToken"]
+    daemon.exec("tab_switch", {"tabId": 5}, session_token=token)
+    n_before = len(ext.received)
+    code, body = daemon.exec("click", {"target": "b"}, session_token=token)
+    assert body["code"] == "tab_not_found"
+    _, st = daemon.exec("session_status", session_token=token)
+    assert st["tabClosed"] is True
+    code, body = daemon.exec("click", {"target": "b"}, session_token=token)
+    assert code == 200 and body["code"] == "tab_closed"
+    assert len(ext.received) == n_before + 1  # sticky call never forwarded
+    _, sw = daemon.exec("tab_switch", {"tabId": 7}, session_token=token)
+    assert sw["success"] is True
+    _, st2 = daemon.exec("session_status", session_token=token)
+    assert st2 == {"success": True, "tabId": 7, "tabClosed": False}
+    code, body = daemon.exec("click", {"target": "b"}, session_token=token)
+    assert body["success"] is True
+    ext.close()
+
+
+def test_batch_expanded_daemon_side_with_pin(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        tid = params.get("tabId", 5)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    _, start = daemon.exec("session_start")
+    token = start["sessionToken"]
+    daemon.exec("tab_switch", {"tabId": 5}, session_token=token)
+    steps = [
+        {"action": "click", "target": "a", "sessionToken": "smuggled"},
+        {"action": "sleep", "ms": 50},
+        {"action": "click", "target": "b", "tabId": 9},
+    ]
+    code, body = daemon.exec("batch", {"steps": steps}, session_token=token, timeout=10)
+    assert code == 200 and body["success"] is True and body["count"] == 3
+    assert [a for a, _ in seen[-2:]] == ["click", "click"]
+    assert seen[-2][1].get("tabId") == 5 and "sessionToken" not in seen[-2][1]
+    assert seen[-1][1].get("tabId") == 9  # one-shot inside batch, no pin change
+    _, st = daemon.exec("session_status", session_token=token)
+    assert st["tabId"] == 5
+    ext.close()
+
+
+def test_batch_stops_on_error_with_shape(daemon):
+    def handler(action, params):
+        if params.get("target") == "boom":
+            return {"success": False, "code": "target_not_found", "error": "nope"}
+        return {"success": True}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    steps = [{"action": "click", "target": "ok"}, {"action": "click", "target": "boom"},
+             {"action": "click", "target": "never"}]
+    code, body = daemon.exec("batch", {"steps": steps}, timeout=10)
+    assert code == 200 and body["success"] is False and body["stoppedAt"] == "click"
+    assert len(body["results"]) == 2
+    ext.close()
+
+
+def test_deadline_ms_forwarded_for_tab_scoped_only(daemon, fake_ext):
+    import time as _t
+    before = int(_t.time() * 1000)
+    daemon.exec("click", {"target": "b", "tabId": 3})
+    daemon.exec("ping")
+    fwd_click = [m for m in fake_ext.received if m.get("action") == "click"][-1]
+    fwd_ping = [m for m in fake_ext.received if m.get("action") == "ping"][-1]
+    assert "deadlineMs" in fwd_click["params"]
+    assert before + 9000 < fwd_click["params"]["deadlineMs"] < before + 15000
+    assert "deadlineMs" not in fwd_ping["params"]
