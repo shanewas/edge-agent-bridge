@@ -40,9 +40,10 @@ edge-bridge extension open     # opens the bundled extension directory
 ```
 
 Turn on **Developer mode** at `edge://extensions`, click **Load unpacked**, and pick that
-directory. Check it took:
+directory. Start the daemon and verify Edge connected:
 
 ```bash
+edge-bridge daemon start
 edge-bridge daemon status
 ```
 
@@ -50,6 +51,9 @@ edge-bridge daemon status
 Daemon: running on 127.0.0.1:18999 (PID 24188)
 Extension: 2.0.1 (connected)
 ```
+
+CLI commands and Python's `with Edge()` start the daemon on first use if it isn't running, but
+`daemon start` brings the extension online right away.
 
 ---
 
