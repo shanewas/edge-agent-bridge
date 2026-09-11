@@ -76,3 +76,49 @@ def test_cli_screenshot_writes_the_file(daemon, fake_ext, tmp_path):
     data = json.loads(out)
     assert data["path"] == str(out_file.resolve())
     assert out_file.exists() and out_file.stat().st_size > 0
+
+
+def test_cli_session_start_status_stop(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "session", "start"], env=env)
+    assert code == 0
+    token = json.loads(out)["sessionToken"]
+    code, out, err = run_cli(["--json", "session", "status", "--session", token], env=env)
+    assert code == 0 and json.loads(out)["tabClosed"] is False
+    code, out, err = run_cli(["--json", "session", "stop", "--session", token], env=env)
+    assert code == 0 and json.loads(out)["success"] is True
+    code, out, err = run_cli(["--json", "session", "status", "--session", token], env=env)
+    assert code == 1 and json.loads(out)["code"] == "unknown_session"
+
+
+def test_cli_session_env_resolution_and_pin_routing(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        tid = params.get("tabId", 5)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    _, out, _ = run_cli(["--json", "session", "start"], env=env)
+    token = json.loads(out)["sessionToken"]
+    env["EDGE_BRIDGE_SESSION"] = token
+    code, out, err = run_cli(["--json", "switch", "5"], env=env)
+    assert code == 0
+    code, out, err = run_cli(["--json", "click", "Save"], env=env)
+    assert code == 0
+    clicks = [p for a, p in seen if a == "click"]
+    assert clicks and clicks[-1].get("tabId") == 5
+    ext.close()
+
+
+def test_cli_no_fallback_flag_accepted(daemon):
+    def handler(action, params):
+        return {"success": True, "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "click", "Save", "--no-fallback"], env=env)
+    assert code == 0, err
+    ext.close()

@@ -15,6 +15,7 @@ SUPPORTED_PROTOCOL_VERSIONS = {"2025-11-25", "2025-06-18", "2025-03-26"}
 COMMON_TOOL_PROPERTIES = {
     "tabId": {"type": "integer", "description": "Optional tab ID to target. If omitted, uses pinned or active tab."},
     "highlight": {"type": "boolean", "description": "Whether to draw visual highlight ring and cursor. Default true."},
+    "fallback": {"type": "boolean", "description": "Enable ref→text→scan→coords fallback ladder. Default true."},
 }
 
 TOOLS: list[dict[str, Any]] = [
@@ -451,6 +452,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 y=args.get("y"),
                 button=args.get("button", "left"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_dblclick":
             res = edge.dblclick(
@@ -461,6 +463,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 x=args.get("x"),
                 y=args.get("y"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_rightclick":
             res = edge.rightclick(
@@ -471,6 +474,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 x=args.get("x"),
                 y=args.get("y"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_hover":
             res = edge.hover(
@@ -481,6 +485,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 x=args.get("x"),
                 y=args.get("y"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_drag":
             res = edge.drag(
@@ -488,6 +493,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 to_target=args.get("to"),
                 steps=args.get("steps", 10),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_fill":
             res = edge.fill(
@@ -497,6 +503,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 append=args.get("append", False),
                 clear=args.get("clear", True),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_type":
             res = edge.type(
@@ -505,6 +512,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 ref=args.get("ref"),
                 target=args.get("target"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_key":
             res = edge.key(key=args.get("key", ""), tab_id=args.get("tabId"))
@@ -515,6 +523,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 value=args.get("value"),
                 label=args.get("label"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_check_radio":
             res = edge.check_radio(
@@ -523,6 +532,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 text=args.get("text"),
                 value=args.get("value"),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_upload":
             res = edge.upload(
@@ -530,6 +540,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 ref=args.get("ref"),
                 files=args.get("files", []),
                 tab_id=args.get("tabId"),
+                fallback=args.get("fallback", True),
             )
         elif tool_name == "edge_scroll":
             res = edge.scroll(
@@ -621,6 +632,12 @@ def serve(stdin=None, stdout=None) -> None:
     out_stream = stdout or sys.stdout.buffer
 
     edge = Edge(pin=True, auto_start=True)
+    mint = edge.send("session_start")
+    if mint.get("success") and mint.get("sessionToken"):
+        edge.session_token = mint["sessionToken"]
+    else:
+        print(f"edge-bridge-mcp: no daemon session ({mint.get('code')}); running tokenless",
+              file=sys.stderr)
 
     try:
         while True:

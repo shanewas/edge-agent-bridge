@@ -98,6 +98,51 @@ def _handle_extension_cmd(args) -> int:
     return 3
 
 
+def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
+    sub = args.session_action
+    if sub == "start" and not getattr(args, "new", False) and edge.session_token:
+        st = edge._send_once("session_status", {})
+        if st.get("success"):
+            if opt_json:
+                print(json.dumps({"success": True, "sessionToken": edge.session_token, **st}))
+            else:
+                print(f"sessionToken={edge.session_token} (existing, tab {st.get('tabId')})")
+            return 0
+    if sub == "start":
+        res = edge._send_once("session_start", {})
+        if not res.get("success"):
+            if opt_json:
+                print(json.dumps(res))
+            else:
+                print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
+            return 1
+        if opt_json:
+            print(json.dumps({"success": True, "sessionToken": res["sessionToken"]}))
+        else:
+            print(f"sessionToken={res['sessionToken']}")
+            print(f"export EDGE_BRIDGE_SESSION={res['sessionToken']}")
+        return 0
+    if not edge.session_token:
+        msg = "no session: pass --session TOKEN or set EDGE_BRIDGE_SESSION"
+        if opt_json:
+            print(json.dumps({"success": False, "code": "no_session", "error": msg}))
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        return 3
+    res = edge._send_once("session_status" if sub == "status" else "session_stop", {})
+    if opt_json:
+        print(json.dumps(res))
+    else:
+        if res.get("success"):
+            if sub == "status":
+                print(f"Session tab: {res.get('tabId')} (closed: {res.get('tabClosed')})")
+            else:
+                print("Session stopped")
+        else:
+            print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
+    return 0 if res.get("success") else 1
+
+
 def _run_repl(edge: Edge) -> int:
     print(f"Edge Agent Bridge REPL (port {edge.port}). Type 'help' or action commands, 'exit' to quit.")
     while True:
@@ -132,6 +177,8 @@ def main(argv=None) -> int:
     common.add_argument("--no-highlight", action="store_true", default=argparse.SUPPRESS, help="Disable visual highlight ring and cursor")
     common.add_argument("--tab", type=int, default=argparse.SUPPRESS, help="Target specific tab ID")
     common.add_argument("--port", type=int, default=argparse.SUPPRESS, help="Bridge port override")
+    common.add_argument("--session", default=argparse.SUPPRESS, help="Daemon session token (or EDGE_BRIDGE_SESSION)")
+    common.add_argument("--no-fallback", action="store_true", default=argparse.SUPPRESS, help="Disable ref→text→scan→coords fallback ladder")
 
     parser = argparse.ArgumentParser(
         prog="edge-bridge",
@@ -179,6 +226,11 @@ def main(argv=None) -> int:
 
     # close
     add_cmd("close", help="Close tab (requires --tab ID)")
+
+    # session
+    p_session = add_cmd("session", help="Manage daemon tab sessions")
+    p_session.add_argument("session_action", choices=["start", "status", "stop"])
+    p_session.add_argument("--new", action="store_true", help="session start: always mint a fresh token")
 
     # nav
     p_nav = add_cmd("nav", help="Navigate to URL")
@@ -323,6 +375,7 @@ def main(argv=None) -> int:
     opt_tab = getattr(args, "tab", None)
     opt_no_highlight = getattr(args, "no_highlight", False)
     opt_port = getattr(args, "port", None)
+    opt_session = getattr(args, "session", None) or os.environ.get("EDGE_BRIDGE_SESSION")
 
     # Special handling: close without --tab
     if args.cmd == "close" and opt_tab is None:
@@ -355,7 +408,11 @@ def main(argv=None) -> int:
         highlight=not opt_no_highlight,
         pin=False,
         auto_start=False,
+        session_token=opt_session,
     )
+
+    if args.cmd == "session":
+        return _handle_session_cmd(args, edge, opt_json)
 
     if args.cmd == "repl":
         return _run_repl(edge)
@@ -383,6 +440,8 @@ def main(argv=None) -> int:
     params = {}
     if opt_tab is not None:
         params["tabId"] = opt_tab
+    if getattr(args, "no_fallback", False):
+        params["fallback"] = False
 
     if action == "ping":
         pass
@@ -516,6 +575,9 @@ def main(argv=None) -> int:
             return 3
 
     res = edge.send(action, params)
+    if opt_session and edge.session_token != opt_session:
+        print(f"edge-bridge: session expired; re-minted sessionToken={edge.session_token} "
+              f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)
 
     # If screenshot with path, save file
     if action == "screenshot" and getattr(args, "path", None) and res.get("success") and (res.get("dataUrl") or res.get("data")):

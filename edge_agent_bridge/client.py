@@ -15,6 +15,30 @@ from pathlib import Path
 from . import config
 
 
+LADDER_ACTIONS = frozenset({
+    "click", "dblclick", "rightclick", "hover", "fill", "type",
+    "select", "check_radio", "upload", "drag",
+})
+LADDER_RETRY_CODES = frozenset({"stale_ref", "stale_snapshot", "target_not_found"})
+WRITE_ACTIONS = frozenset({"fill", "type"})
+
+
+def score_element_match(entries, text):
+    def name(e):
+        return e.get("text") or e.get("name") or ""
+    for e in entries or []:
+        if name(e) == text:
+            return e
+    tl = (text or "").lower()
+    for e in entries or []:
+        if name(e).lower() == tl:
+            return e
+    for e in entries or []:
+        if tl and tl in name(e).lower():
+            return e
+    return None
+
+
 def _probe_status(port: int) -> dict | None:
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
@@ -74,6 +98,7 @@ class Edge:
         pin=True,
         auto_start=True,
         token=None,
+        session_token=None,
     ):
         self.tab_id = tab_id
         self.port = port or config.port()
@@ -82,6 +107,10 @@ class Edge:
         self.pin = pin
         self.auto_start = auto_start
         self.token = token
+        self.session_token = session_token
+        self._ref_texts = {}
+        self._degraded_warned = False
+        self._reminting = False
         self._conn: http.client.HTTPConnection | None = None
 
     def _get_connection(self) -> http.client.HTTPConnection:
@@ -89,7 +118,7 @@ class Edge:
             self._conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=self.timeout)
         return self._conn
 
-    def send(self, action: str, params: dict | None = None, timeout: int | None = None) -> dict:
+    def _send_once(self, action: str, params: dict | None = None, timeout: int | None = None) -> dict:
         """Send an action to the daemon over loopback HTTP POST /exec."""
         if self.auto_start:
             status = _probe_status(self.port)
@@ -112,13 +141,16 @@ class Edge:
             }
 
         p = dict(params or {})
-        if self.pin and self.tab_id is not None and "tabId" not in p:
+        if self.pin and self.tab_id is not None and self.session_token is None and "tabId" not in p:
             p["tabId"] = self.tab_id
         if not self.highlight and "highlight" not in p:
             p["highlight"] = False
 
         t = timeout or self.timeout
-        payload = json.dumps({"action": action, "params": p, "timeout": t}).encode("utf-8")
+        body = {"action": action, "params": p, "timeout": t}
+        if self.session_token is not None:
+            body["sessionToken"] = self.session_token
+        payload = json.dumps(body).encode("utf-8")
         headers = {
             "Host": f"127.0.0.1:{self.port}",
             "Content-Type": "application/json",
@@ -160,7 +192,7 @@ class Edge:
             }
 
         # Session pinning maintenance
-        if self.pin:
+        if self.pin and self.session_token is None:
             if action in ("tab_close", "close_tab") and p.get("tabId") == self.tab_id:
                 self.tab_id = None
             if data.get("code") == "tab_not_found":
@@ -172,6 +204,165 @@ class Edge:
                     self.tab_id = tab_info["id"]
 
         return data
+
+    def send(self, action: str, params: dict | None = None, timeout: int | None = None) -> dict:
+        p = dict(params or {})
+        fallback = p.pop("fallback", True)
+        data = self._send_once(action, p, timeout)
+        if data.get("code") == "unknown_session" and self.session_token and not self._reminting:
+            self._reminting = True
+            try:
+                mint = self._send_once("session_start", {})
+                if mint.get("success") and mint.get("sessionToken"):
+                    self.session_token = mint["sessionToken"]
+                    data = self._send_once(action, p, timeout)
+            finally:
+                self._reminting = False
+        if action == "elements" and data.get("success"):
+            for entry in data.get("elements") or []:
+                ref = entry.get("ref")
+                text = entry.get("text") or entry.get("name")
+                if ref and text:
+                    self._ref_texts[ref] = text
+            while len(self._ref_texts) > 1000:
+                self._ref_texts.pop(next(iter(self._ref_texts)))
+        if action in LADDER_ACTIONS and fallback is not False and not self._has_explicit_coords(action, p):
+            data = self._ladder(action, p, data, timeout)
+        if action in WRITE_ACTIONS and isinstance(data, dict):
+            data = self._verify_write(action, p, data, timeout)
+        return data
+
+    @staticmethod
+    def _has_explicit_coords(action, params) -> bool:
+        if action == "drag":
+            for end in (params.get("from"), params.get("to")):
+                if isinstance(end, dict) and "x" in end and "y" in end:
+                    return True
+            return False
+        return "x" in params and "y" in params
+
+    def _ladder(self, action, params, first, timeout):
+        if first.get("success") or first.get("code") not in LADDER_RETRY_CODES:
+            return first
+        tried = [{"step": "ref" if "ref" in params else "target", "outcome": first.get("code")}]
+        if action == "drag":
+            return self._ladder_drag(params, tried, timeout)
+        locator_text = params.get("target") or params.get("selector")
+        if action not in WRITE_ACTIONS:
+            locator_text = locator_text or params.get("text")
+        if locator_text is None and "ref" in params:
+            locator_text = self._ref_texts.get(params["ref"])
+        if locator_text is not None:
+            rung2 = {}
+            for k, v in params.items():
+                if k in ("ref", "selector", "target"):
+                    continue
+                if k == "text" and action not in WRITE_ACTIONS:
+                    continue
+                rung2[k] = v
+            rung2["target"] = locator_text
+            second = self._send_once(action, rung2, timeout)
+            tried.append({"step": "text", "outcome": "ok" if second.get("success") else second.get("code")})
+            if second.get("success"):
+                second["ladder"] = {"rung": "text", "tried": tried}
+                return second
+            if second.get("code") not in LADDER_RETRY_CODES:
+                return second
+        else:
+            tried.append({"step": "text", "outcome": "no text target"})
+            return {"success": False, "code": "exhausted_fallback",
+                    "error": f"{action} target could not be re-resolved", "tried": tried}
+        scan_params = {"tabId": params["tabId"]} if "tabId" in params else {}
+        match = None
+        for _ in range(2):
+            scan = self._send_once("elements", scan_params, timeout)
+            if not scan.get("success"):
+                tried.append({"step": "scan", "outcome": scan.get("code")})
+                break
+            match = score_element_match(scan.get("elements"), locator_text)
+            if match is not None:
+                tried.append({"step": "scan", "outcome": "match"})
+                break
+            tried.append({"step": "scan", "outcome": "0 matches"})
+        if match is None:
+            return {"success": False, "code": "exhausted_fallback",
+                    "error": f"{action} target could not be re-resolved", "tried": tried}
+        rung4 = {}
+        for k, v in params.items():
+            if k in ("ref", "selector", "target", "x", "y"):
+                continue
+            if k == "text" and action not in WRITE_ACTIONS:
+                continue
+            rung4[k] = v
+        rung4["x"] = match["x"]
+        rung4["y"] = match["y"]
+        final = self._send_once(action, rung4, timeout)
+        tried.append({"step": "coords", "outcome": "ok" if final.get("success") else final.get("code")})
+        if final.get("success"):
+            final["ladder"] = {"rung": "coords", "tried": tried}
+            return final
+        return {"success": False, "code": "exhausted_fallback",
+                "error": f"{action} target could not be re-resolved", "tried": tried}
+
+    def _ladder_drag(self, params, tried, timeout):
+        tried.append({"step": "text", "outcome": "n/a for drag"})
+        scan_params = {"tabId": params["tabId"]} if "tabId" in params else {}
+        coords = {}
+        for key in ("from", "to"):
+            end = params.get(key)
+            if isinstance(end, str):
+                scan = self._send_once("elements", scan_params, timeout)
+                if not scan.get("success"):
+                    tried.append({"step": "scan", "outcome": scan.get("code")})
+                    break
+                match = score_element_match(scan.get("elements"), end)
+                if match is None:
+                    tried.append({"step": "scan", "outcome": "0 matches"})
+                    break
+                tried.append({"step": "scan", "outcome": "match"})
+                coords[key] = match
+        if len(coords) != 2:
+            return {"success": False, "code": "exhausted_fallback",
+                    "error": "drag endpoints could not be re-resolved", "tried": tried}
+        rung = {k: v for k, v in params.items() if k not in ("from", "to")}
+        rung["fromX"] = coords["from"]["x"]
+        rung["fromY"] = coords["from"]["y"]
+        rung["toX"] = coords["to"]["x"]
+        rung["toY"] = coords["to"]["y"]
+        final = self._send_once("drag", rung, timeout)
+        tried.append({"step": "coords", "outcome": "ok" if final.get("success") else final.get("code")})
+        if final.get("success"):
+            final["ladder"] = {"rung": "coords", "tried": tried}
+            return final
+        return {"success": False, "code": "exhausted_fallback",
+                "error": "drag endpoints could not be re-resolved", "tried": tried}
+
+    def _verify_write(self, action, params, data, timeout):
+        if not data.get("success"):
+            return data
+        if data.get("match") is True:
+            return data
+        if "match" not in data and "readback" not in data or data.get("match") == "unknown":
+            data["match"] = "unknown"
+            if not self._degraded_warned:
+                self._degraded_warned = True
+                print("edge-bridge: extension predates verified writes (no readback); continuing unverified",
+                      file=sys.stderr)
+                data["notice"] = "extension predates verified writes; match unknown"
+            return data
+        expected = data.get("written")
+        if expected is None:
+            expected = params.get("text", "")
+        retry_params = {k: v for k, v in params.items() if k != "text"}
+        retry_params["text"] = expected
+        retry_params["clear"] = True
+        retry = self._send_once("fill", retry_params, timeout)
+        if retry.get("success") and retry.get("match") is True:
+            retry["retried"] = True
+            return retry
+        return {"success": False, "code": "write_mismatch",
+                "error": f"Write verification failed after retry: expected {expected!r}, read back {retry.get('readback')!r}",
+                "expected": expected, "readback": retry.get("readback"), "attempts": 2}
 
     def tab(self) -> dict:
         return self.send("tab")
@@ -255,29 +446,39 @@ class Edge:
             p["tabId"] = tab_id
         return p
 
-    def click(self, target=None, selector=None, text=None, ref=None, x=None, y=None, button="left", modifiers=None, tab_id=None) -> dict:
+    def click(self, target=None, selector=None, text=None, ref=None, x=None, y=None, button="left", modifiers=None, tab_id=None, fallback=True) -> dict:
         p = self._resolve_target_params(target, selector, text, ref, x, y, button, modifiers, tab_id)
+        if fallback is False:
+            p["fallback"] = False
         return self.send("click", p)
 
-    def dblclick(self, target=None, selector=None, text=None, ref=None, x=None, y=None, button="left", modifiers=None, tab_id=None) -> dict:
+    def dblclick(self, target=None, selector=None, text=None, ref=None, x=None, y=None, button="left", modifiers=None, tab_id=None, fallback=True) -> dict:
         p = self._resolve_target_params(target, selector, text, ref, x, y, button, modifiers, tab_id)
+        if fallback is False:
+            p["fallback"] = False
         return self.send("dblclick", p)
 
-    def rightclick(self, target=None, selector=None, text=None, ref=None, x=None, y=None, tab_id=None) -> dict:
+    def rightclick(self, target=None, selector=None, text=None, ref=None, x=None, y=None, tab_id=None, fallback=True) -> dict:
         p = self._resolve_target_params(target, selector, text, ref, x, y, "right", None, tab_id)
+        if fallback is False:
+            p["fallback"] = False
         return self.send("rightclick", p)
 
-    def hover(self, target=None, selector=None, text=None, ref=None, x=None, y=None, tab_id=None) -> dict:
+    def hover(self, target=None, selector=None, text=None, ref=None, x=None, y=None, tab_id=None, fallback=True) -> dict:
         p = self._resolve_target_params(target, selector, text, ref, x, y, "left", None, tab_id)
+        if fallback is False:
+            p["fallback"] = False
         return self.send("hover", p)
 
-    def drag(self, from_target, to_target, steps: int = 10, tab_id=None) -> dict:
+    def drag(self, from_target, to_target, steps: int = 10, tab_id=None, fallback=True) -> dict:
         p = {"from": from_target, "to": to_target, "steps": steps}
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("drag", p)
 
-    def fill(self, target=None, text: str = "", ref=None, append: bool = False, clear: bool = True, tab_id=None) -> dict:
+    def fill(self, target=None, text: str = "", ref=None, append: bool = False, clear: bool = True, tab_id=None, fallback=True) -> dict:
         p = {"text": text, "append": append, "clear": clear}
         if ref is not None:
             p["ref"] = ref
@@ -285,9 +486,11 @@ class Edge:
             p["target"] = target
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("fill", p)
 
-    def type(self, text: str, delay: int = 20, ref=None, target=None, tab_id=None) -> dict:
+    def type(self, text: str, delay: int = 20, ref=None, target=None, tab_id=None, fallback=True) -> dict:
         p = {"text": text, "delay": delay}
         if ref is not None:
             p["ref"] = ref
@@ -295,6 +498,8 @@ class Edge:
             p["target"] = target
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("type", p)
 
     def key(self, key: str, tab_id=None) -> dict:
@@ -303,7 +508,7 @@ class Edge:
             p["tabId"] = tab_id
         return self.send("key", p)
 
-    def check_radio(self, target=None, selector: str = None, text: str = None, value: str = None, tab_id=None) -> dict:
+    def check_radio(self, target=None, selector: str = None, text: str = None, value: str = None, tab_id=None, fallback=True) -> dict:
         """Check a radio button or checkbox by selector, label text, or value attribute."""
         p = {}
         if selector is not None:
@@ -316,9 +521,11 @@ class Edge:
             p["value"] = str(value)
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("check_radio", p)
 
-    def select(self, target=None, ref=None, value=None, label=None, tab_id=None) -> dict:
+    def select(self, target=None, ref=None, value=None, label=None, tab_id=None, fallback=True) -> dict:
         p = {}
         if ref is not None:
             p["ref"] = ref
@@ -330,9 +537,11 @@ class Edge:
             p["label"] = label
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("select", p)
 
-    def upload(self, target=None, ref=None, files=None, tab_id=None) -> dict:
+    def upload(self, target=None, ref=None, files=None, tab_id=None, fallback=True) -> dict:
         file_list = []
         if files:
             if isinstance(files, (list, tuple)):
@@ -346,6 +555,8 @@ class Edge:
             p["target"] = target
         if tab_id is not None:
             p["tabId"] = tab_id
+        if fallback is False:
+            p["fallback"] = False
         return self.send("upload", p)
 
     def scroll(self, x=None, y=None, ref=None, target=None, tab_id=None) -> dict:
