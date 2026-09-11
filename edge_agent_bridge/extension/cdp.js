@@ -167,8 +167,19 @@ export function parseKey(keyStr) {
 }
 
 // Type text one character at a time with real key events (autocomplete widgets need keydown).
-export async function nativeType(tabId, text, delayMs = 20) {
-  for (const ch of String(text)) {
+// opts.onProgress(n) runs after the nth char is dispatched and may throw to abort;
+// opts.deadlineMs (epoch ms) aborts with a deadline_exceeded error carrying typedSoFar.
+export async function nativeType(tabId, text, delayMs = 20, opts = {}) {
+  const chars = Array.from(String(text));
+  const { onProgress = null, deadlineMs = 0 } = opts || {};
+  for (let i = 0; i < chars.length; i++) {
+    if (deadlineMs && Date.now() > Number(deadlineMs)) {
+      const err = new Error("deadline exceeded");
+      err.code = "deadline_exceeded";
+      err.typedSoFar = i;
+      throw err;
+    }
+    const ch = chars[i];
     if (ch === "\n" || ch === "\r") {
       await nativeKey(tabId, "Enter");
     } else {
@@ -177,7 +188,11 @@ export async function nativeType(tabId, text, delayMs = 20) {
       await cdpSend(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: ch, windowsVirtualKeyCode: upper, nativeVirtualKeyCode: upper });
     }
     if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+    if (onProgress && (i === 0 || (i + 1) % 8 === 0)) {
+      await onProgress(i + 1);
+    }
   }
+  return chars.length;
 }
 
 export async function captureScreenshot(tabId, { format = "jpeg", quality = 80, clip = null } = {}) {

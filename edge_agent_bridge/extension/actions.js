@@ -3,7 +3,7 @@
 import { ensureDebugger, cdpSend, runOnTab, nativeMove, nativeClick, nativeDrag, nativeScroll, nativeKey, nativeType, captureScreenshot, setFileInputFiles } from "./cdp.js";
 import { enableEvents, getConsole, inflightUrls, getOpenDialog, setDialogPolicy } from "./events.js";
 import * as page from "./page.js";
-import { frameOfRef, snapshotTab as framesSnapshotTab } from "./frames.js";
+import { frameOfRef, probeSubframeIds, snapshotTab as framesSnapshotTab } from "./frames.js";
 
 // Attach the debugger and start event capture (console, network, dialogs) for the tab.
 async function attach(tabId) {
@@ -110,6 +110,12 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   }
   const resolveOpts = { highlight: opts.highlight !== false };
   const frameId = frameOfRef(target);
+  if (frameId !== undefined) {
+    const live = await probeSubframeIds(tabId);
+    if (!live.includes(frameId)) {
+      return { found: false, code: "stale_ref", error: `Frame ${frameId} for ref "${target}" is gone` };
+    }
+  }
   const start = Date.now();
   let last = null;
   while (Date.now() - start < timeoutMs) {
@@ -139,6 +145,40 @@ async function locate(tabId, p, verb) {
 function showCursor(tabId, x, y, click, p) {
   if (p.highlight === false) return;
   execInTab(tabId, page.pageCursor, [x, y, Boolean(click)]).catch(() => {});
+}
+
+const FOCUS_BACKOFF_MS = [50, 100, 200];
+
+function focusOpId() {
+  return "eab" + Date.now().toString(36) + Math.floor(Math.random() * 0xffffffff).toString(36);
+}
+
+function normalizeReadValue(v) {
+  if (typeof v === "string") return v;
+  if (v === null || v === undefined) return "";
+  return String(v);
+}
+
+// Pre-assert focus on mode ({x,y} or {active:true}) in frameId. Returns {ok} or {ok:false, result}.
+async function preAssertFocus(tabId, frameId, mode, uuid) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(FOCUS_BACKOFF_MS[attempt - 1]);
+    const r = await execInTab(tabId, page.pageAssertFocus, [mode, uuid, false], "ISOLATED", frameId);
+    if (!r || r.success === false) {
+      return { ok: false, result: fail("focus_unverifiable", `Focus assertion failed in frame ${frameId === undefined ? "main" : frameId}: ${(r && r.error) || "injection failed"}`) };
+    }
+    if (r.focusable === false) {
+      return { ok: false, result: fail("focus_lost", "Target cannot take focus") };
+    }
+    if (r.focused) return { ok: true };
+  }
+  return { ok: false, result: fail("focus_lost", "Target did not take focus after 3 attempts") };
+}
+
+async function releaseAssert(tabId, frameId, uuid) {
+  try {
+    await execInTab(tabId, page.pageReleaseAssert, [uuid], "ISOLATED", frameId);
+  } catch (e) {}
 }
 
 export async function execute(cmd) {
@@ -493,53 +533,143 @@ export async function execute(cmd) {
 
       case "type": {
         const text = p.text !== undefined ? String(p.text) : "";
+        const chars = Array.from(text);
+        const deadlineMs = Number(p.deadlineMs) || 0;
         const target = p.ref || p.target || p.selector;
-        if (target) {
+        const pastDeadline = () => deadlineMs && Date.now() > deadlineMs;
+        if (pastDeadline()) {
+          return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { typedSoFar: 0, remaining: text } });
+        }
+        let mode;
+        let frameId;
+        if (target || hasCoords(p)) {
           const loc = await locate(tabId, p, "type");
           if (!loc.ok) return loc.result;
-          const hasDbg = await attach(tabId);
-          if (!hasDbg) return await execInTab(tabId, page.pageTypeText, [p.selector, text, false]);
-          await nativeClick(tabId, loc.x, loc.y, "left", 1);
-          showCursor(tabId, loc.x, loc.y, true, p);
-          await new Promise(res => setTimeout(res, 50));
+          mode = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          frameId = frameOfRef(p.ref || p.target || p.selector);
         } else {
-          const hasDbg = await attach(tabId);
-          if (!hasDbg) return await execInTab(tabId, page.pageTypeText, [null, text, false]);
+          mode = { active: true };
+          frameId = undefined;
         }
-        await nativeType(tabId, text, p.delay === undefined ? 20 : Number(p.delay));
-        return { success: true, text, native: true, chars: Array.from(text).length };
+        const uuid = focusOpId();
+        const hasDbg = await attach(tabId);
+        try {
+          if (hasDbg && (target || hasCoords(p))) {
+            await nativeClick(tabId, mode.x, mode.y, "left", 1);
+            showCursor(tabId, mode.x, mode.y, true, p);
+          }
+          const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
+          const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : null;
+          const asserted = await preAssertFocus(tabId, frameId, mode, uuid);
+          if (!asserted.ok) return asserted.result;
+          const onProgress = async (n) => {
+            const chk = await execInTab(tabId, page.pageAssertFocus, [mode, uuid, true], "ISOLATED", frameId);
+            if (!chk || chk.success === false || chk.focused === false) {
+              const err = new Error("focus stolen mid-type");
+              err.code = "focus_stolen";
+              err.typedSoFar = n;
+              throw err;
+            }
+          };
+          try {
+            if (hasDbg) {
+              await nativeType(tabId, text, p.delay === undefined ? 20 : Number(p.delay), { onProgress, deadlineMs });
+            } else {
+              await execInTab(tabId, page.pageTypeText, [p.selector || null, text, false], "ISOLATED", frameId);
+            }
+          } catch (e) {
+            if (e && e.code === "focus_stolen") {
+              return fail("focus_stolen", `Focus moved after ${e.typedSoFar} chars; resume with "remaining"`, {
+                typedSoFar: e.typedSoFar, remaining: chars.slice(e.typedSoFar).join(""),
+              });
+            }
+            if (e && e.code === "deadline_exceeded") {
+              return fail("deadline_exceeded", "Write deadline passed mid-type", {
+                progress: { typedSoFar: e.typedSoFar || 0, remaining: chars.slice(e.typedSoFar || 0).join("") },
+              });
+            }
+            throw e;
+          }
+          if (pastDeadline()) {
+            return fail("deadline_exceeded", "Write deadline passed before readback", {
+              progress: { typedSoFar: chars.length, remaining: "" },
+            });
+          }
+          await sleep(100);
+          const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
+          if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
+            return { success: true, text, native: hasDbg, chars: chars.length, written: valueBefore === null ? text : valueBefore + text, readback: null, match: "unknown" };
+          }
+          const written = valueBefore === null ? text : valueBefore + text;
+          const readback = normalizeReadValue(rb.value);
+          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+        } finally {
+          await releaseAssert(tabId, frameId, uuid);
+        }
       }
 
       case "fill": {
         const target = p.ref || p.target || p.selector;
         const text = p.text !== undefined ? String(p.text) : "";
-        let x = p.x, y = p.y, targetInfo = {};
-        if (!hasCoords(p) && target) {
-          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
-          if (r && r.found) {
-            x = r.x;
-            y = r.y;
-            targetInfo = r;
-          }
+        const shouldClear = p.clear !== false;
+        const deadlineMs = Number(p.deadlineMs) || 0;
+        if (deadlineMs && Date.now() > deadlineMs) {
+          return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { written: text } });
         }
-        if (x !== undefined && y !== undefined && x !== null && y !== null) {
-          try {
-            const hasDbg = await attach(tabId);
-            if (hasDbg) {
-              await nativeClick(tabId, Number(x), Number(y), "left", 1);
-              showCursor(tabId, Number(x), Number(y), true, p);
-              await new Promise(res => setTimeout(res, 50));
-              const prep = await execInTab(tabId, page.pageFillPrepare, [Number(x), Number(y), p.clear !== false]);
+        let mode = null;
+        let frameId = frameOfRef(p.ref || p.target || p.selector);
+        let targetInfo = {};
+        if (hasCoords(p) && !target) {
+          mode = { x: Number(p.x), y: Number(p.y) };
+        } else if (target) {
+          const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+          if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
+          mode = { x: r.x, y: r.y };
+          targetInfo = r;
+        } else {
+          mode = { active: true };
+          frameId = undefined;
+        }
+        const uuid = focusOpId();
+        const hasDbg = await attach(tabId);
+        const hasPoint = mode.x !== undefined;
+        try {
+          const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
+          const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : "";
+          const asserted = await preAssertFocus(tabId, frameId, mode, uuid);
+          if (!asserted.ok) return asserted.result;
+          let native = false;
+          if (hasDbg && hasPoint) {
+            try {
+              await nativeClick(tabId, mode.x, mode.y, "left", 1);
+              showCursor(tabId, mode.x, mode.y, true, p);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear]);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [Number(x), Number(y), text]);
-              return { success: true, text, native: true, ...targetInfo };
+              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text]);
+              native = true;
+            } catch (e) {
+              log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
             }
-          } catch (e) {
-            log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
           }
+          if (!native) {
+            const syn = await execInTab(tabId, page.pageTypeText, [p.selector || null, text, shouldClear], "ISOLATED", frameId);
+            if (syn && syn.success === false) return syn;
+          }
+          if (deadlineMs && Date.now() > deadlineMs) {
+            return fail("deadline_exceeded", "Write deadline passed before readback", { progress: { written: shouldClear ? text : valueBefore + text } });
+          }
+          await sleep(100);
+          const rb = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
+          const written = shouldClear ? text : valueBefore + text;
+          if (!rb || rb.success === false || rb.verifiable === false || rb.present === false) {
+            return { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
+          }
+          const readback = normalizeReadValue(rb.value);
+          return { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+        } finally {
+          await releaseAssert(tabId, frameId, uuid);
         }
-        return await execInTab(tabId, page.pageTypeText, [p.selector, text, p.clear !== false]);
       }
 
       case "key": {

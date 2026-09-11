@@ -690,3 +690,74 @@ export function pageCheckRadio(selector, text, value) {
     checked: inp ? inp.checked : true,
   };
 }
+
+export async function pageAssertFocus(mode, uuid, checkOnly) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = null;
+  if (mode && mode.active) {
+    el = document.activeElement;
+  } else if (mode) {
+    el = document.elementFromPoint(mode.x, mode.y);
+  }
+  if (el && el.tagName === "LABEL") {
+    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
+    else el = el.querySelector("input, textarea") || el;
+  }
+  if (!el) return { success: true, focused: false, focusable: false };
+  const tag = el.tagName || "";
+  const focusable = !el.disabled && (el.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el.tabIndex >= 0 && typeof el.focus === "function"));
+  if (!checkOnly) {
+    if (!focusable) return { success: true, focused: false, focusable: false };
+    try { el.focus(); } catch (e) { return { success: true, focused: false, focusable: false }; }
+    await new Promise(r => setTimeout(r, 50));
+    try { el.dataset.bridgeAssert = uuid; } catch (e) {}
+  }
+  const active = document.activeElement;
+  let focused = active === el || (!!active && !!active.dataset && active.dataset.bridgeAssert === uuid);
+  if (!focused && active && active !== document.body) {
+    const owns = ((el.getAttribute && el.getAttribute("aria-owns") || "") + " " + (el.getAttribute && el.getAttribute("aria-controls") || "")).split(/\s+/);
+    if (active.id && owns.indexOf(active.id) !== -1) focused = true;
+    const role = ((active.getAttribute && active.getAttribute("role")) || "").toLowerCase();
+    if (role === "listbox" || role === "option") focused = true;
+  }
+  if (!focused && !checkOnly) {
+    try { delete el.dataset.bridgeAssert; } catch (e) {}
+  }
+  return { success: true, focused, focusable };
+}
+
+export function pageReadback(mode) {
+  const lib = window.__eabLib;
+  if (!lib) return { success: false, code: "lib_missing" };
+  let el = null;
+  if (mode && mode.active) {
+    el = document.activeElement;
+  } else if (mode) {
+    el = document.elementFromPoint(mode.x, mode.y);
+  }
+  if (el && el.tagName === "LABEL") {
+    if (el.htmlFor) el = document.getElementById(el.htmlFor) || el;
+    else el = el.querySelector("input, textarea") || el;
+  }
+  if (!el || el === document.body || el === document.documentElement) {
+    return { success: true, present: false, verifiable: false };
+  }
+  const tag = el.tagName || "";
+  const type = (el.getAttribute && el.getAttribute("type") || "").toLowerCase();
+  if (el.isContentEditable) return { success: true, present: true, verifiable: true, value: el.innerText };
+  if (tag === "INPUT" && (type === "checkbox" || type === "radio")) {
+    return { success: true, present: true, verifiable: true, value: el.checked };
+  }
+  if (tag === "SELECT" && !el.multiple) return { success: true, present: true, verifiable: true, value: el.value };
+  if ("value" in el) return { success: true, present: true, verifiable: true, value: el.value };
+  return { success: true, present: true, verifiable: false, value: null };
+}
+
+export function pageReleaseAssert(uuid) {
+  try {
+    const marked = document.querySelectorAll('[data-bridge-assert="' + uuid + '"]');
+    marked.forEach(m => { delete m.dataset.bridgeAssert; });
+  } catch (e) {}
+  return { success: true };
+}
