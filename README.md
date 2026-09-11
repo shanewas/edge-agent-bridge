@@ -150,6 +150,11 @@ edge-bridge nav https://example.com
 edge-bridge new https://example.com --group Agent
 edge-bridge close --tab 1459
 edge-bridge batch '[{"action":"click","target":"e5"},{"action":"sleep","ms":50},{"action":"fill","target":"e1","text":"spec"}]'
+edge-bridge session start               # prints sessionToken=<uuid>; --new always mints
+edge-bridge session status --session <uuid>
+edge-bridge session stop --session <uuid>
+edge-bridge click e5 --session <uuid>   # session pin; --tab is a one-shot override
+edge-bridge click e5 --no-fallback      # disable the ref→text→scan→coords ladder
 ```
 
 `--json` prints the raw result as a single line and sets the exit code: 0 on success, 1 when the

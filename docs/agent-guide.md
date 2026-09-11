@@ -66,11 +66,21 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 |---|---|---|
 | `stale_snapshot`, `stale_ref` | refs are from an old page state | snapshot again |
 | `target_not_found` | nothing matched within the timeout | snapshot, pick a ref |
-| `tab_not_found` | the pinned tab is gone | the next call re-resolves the active tab |
+| `tab_not_found` | the pinned tab is gone | tokenless: the next call re-resolves the active tab; session: expect sticky `tab_closed` until `switch`/`new` |
 | `extension_offline` | Edge is closed or the extension is off | tell the user to open Edge and check the popup |
 | `extension_outdated` | the extension predates the daemon | tell the user to update it |
 | `dialog_open` | a native dialog is waiting | `edge_dialog` accept or dismiss |
 | `timeout` | the wait condition never held | report what `inflight` or `url` shows |
+| `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
+| `tab_closed` | session pin points at a closed tab | `switch` or `new` to re-pin |
+| `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
+| `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once; if repeated, `session start` |
+| `focus_lost` | target never took focus | snapshot, check overlays, coords click |
+| `focus_unverifiable` | frame context unresolvable | retry, coords-only click, or abort |
+| `focus_stolen` | focus moved mid-type | resume with `remaining` |
+| `deadline_exceeded` | extension passed `deadlineMs` | retry (locks/deadlines reset), split long writes |
+| `write_mismatch` | readback differs after retry | report expected vs readback, stop |
+| `exhausted_fallback` | ref→text→scan→coords all failed | read `tried`, snapshot, new approach |
 
 ## Setup (once per machine)
 
@@ -82,3 +92,40 @@ edge-bridge status         # daemon, extension, and pairing state
 
 The extension comes from the Edge Add-ons store ("Edge Agent Bridge"); developers can load
 `edge-bridge extension path` unpacked instead.
+
+## Sessions: one tab per agent (v2.1.0+)
+
+CLI invocations are stateless, so each agent holds a daemon-side session pinned to one tab:
+
+```
+edge-bridge session start            # prints sessionToken=<uuid>
+export EDGE_BRIDGE_SESSION=<uuid>    # or pass --session <uuid> per call
+edge-bridge switch 1459              # pin this session to your tab
+edge-bridge session status           # shows pin state
+edge-bridge session stop             # drop it server-side
+```
+
+Forgetting `--tab` is harmless inside a session: the daemon injects your pinned tab. An explicit `--tab` is a one-shot override and never changes the pin. Only `switch` and `new` re-pin. MCP clients get an implicit session per process automatically. If your tab closes, the session goes sticky `tab_closed` — every tab-scoped call fails until `switch`/`new`. There is no shared default session: two agents MUST use distinct tokens or they share one pin.
+
+Multi-agent etiquette: own tab each. Per-tab locks serialize writers as defense-in-depth, not as an excuse to share a tab.
+
+## Verified writes: `match`, `write_mismatch`, `focus_stolen`
+
+`edge_fill`/`edge_type` verify every write. Results carry `written` (expected full value), `readback` (value read back after 100ms), and `match`:
+
+- `match: true` — written value confirmed.
+- `match: false` — the client already retried once with fill semantics; a second mismatch returns `write_mismatch` with `{expected, readback, attempts: 2}`. Report both values and STOP; do not continue silently.
+- `match: "unknown"` — the extension predates readback (check `edge-bridge status`: old `extension_version` means expected degradation, new version means broken readback). The client warns once and continues unverified.
+
+Focus is asserted before every write (≤3 tries) and rechecked after the 1st char and every 8 chars while typing:
+
+- `focus_lost` — target never took focus. Snapshot, check overlays, try a coords click.
+- `focus_unverifiable` — the target frame vanished mid-write. Retry, coords-only click, or abort.
+- `focus_stolen` — the human (or page) moved focus mid-type. Resume by typing `remaining` (exactly `typedSoFar` chars already landed).
+- At most 8 chars can land off-target on a steal (sampling residual, inherent).
+
+## The fallback ladder and `tab_busy`
+
+Ref-taking actions (`click`, `dblclick`, `rightclick`, `hover`, `fill`, `type` with target, `select`, `check-radio`, `upload`, `drag`) automatically retry ref → text/selector → fresh `elements` scan → coords from the best match (exact, then case-insensitive, then substring text match), with at most 2 extra scans per call. Explicit `--x/--y` skips the ladder; `--no-fallback` disables it. Total failure returns `exhausted_fallback` with `tried: [{step, outcome}]` — read it, snapshot fresh, try a new approach.
+
+`tab_busy` means another writer holds your tab's lock (10s acquire). Back off 250ms·2ⁿ with jitter, ≤4 retries, then surface or use another tab.

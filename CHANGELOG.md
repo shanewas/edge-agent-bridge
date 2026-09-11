@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.0
+
+- Daemon-side tab sessions: `edge-bridge session start/status/stop`, `--session` /
+  `EDGE_BRIDGE_SESSION`, MCP implicit session. Forgetting `--tab` is harmless inside a
+  session; explicit `--tab` is a one-shot override; only `switch`/`new` re-pin.
+- Per-tab locks in the daemon (10s acquire, `tab_busy` after); batches expand
+  daemon-side and lock per step (non-atomic). Offline dispatches fail fast with
+  `extension_offline`; every dispatch carries a 12s `deadlineMs` the extension enforces.
+- Extension focus guards on `type`/`fill`: frame-aware pre-assert (≤3 tries),
+  mid-type sampling (1st + every 8th char) with `focus_stolen` resume info, combobox
+  carve-out. New codes: `focus_lost`, `focus_unverifiable`, `focus_stolen`,
+  `deadline_exceeded`, `stale_ref` (vanished ref frame).
+- Verified writes: `type`/`fill` return `{written, readback, match}`; the client
+  retries once on mismatch and returns `write_mismatch` after that. Old extensions
+  degrade to `match: "unknown"` with a one-time warning.
+- Client fallback ladder for ref-taking actions (ref → text → fresh scan → coords,
+  ≤2 extra scans, `--no-fallback` opt-out, `exhausted_fallback` shape).
+
 ## 2.0.2
 
 - Direct link to the Microsoft Edge Add-ons store listing (`Agent Browser Bridge`) added to `README.md`, `pyproject.toml` URLs, and package metadata.
