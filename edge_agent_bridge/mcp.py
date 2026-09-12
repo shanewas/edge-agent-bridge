@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) server for Edge Agent Bridge.
 
-Implements MCP stdio transport (spec 2025-11-25) exposing 28 browser automation tools.
+Implements MCP stdio transport (spec 2025-11-25) exposing 31 browser automation tools.
 """
 import json
 import logging
@@ -365,6 +365,32 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "edge_history_search",
+        "description": "Search browsing history by text query over URLs and titles.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to search for in history URLs and titles."},
+                "maxResults": {"type": "integer", "description": "Maximum results to return. Default 20.", "default": 20},
+                "startTime": {"type": "number", "description": "Only items visited after this time (ms since epoch)."},
+                "endTime": {"type": "number", "description": "Only items visited before this time (ms since epoch)."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+        },
+    },
+    {
+        "name": "edge_history_delete",
+        "description": "Delete a URL from browsing history.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to remove from history."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+            "required": ["url"],
+        },
+    },
+    {
         "name": "edge_batch",
         "description": "Execute a list of action steps sequentially in a single call.",
         "inputSchema": {
@@ -581,6 +607,15 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 prompt_text=args.get("promptText"),
                 tab_id=args.get("tabId"),
             )
+        elif tool_name == "edge_history_search":
+            res = edge.history_search(
+                text=args.get("text", ""),
+                max_results=args.get("maxResults", 20),
+                start_time=args.get("startTime"),
+                end_time=args.get("endTime"),
+            )
+        elif tool_name == "edge_history_delete":
+            res = edge.history_delete(url=args.get("url", ""))
         elif tool_name == "edge_batch":
             res = edge.batch(steps=args.get("steps", []), tab_id=args.get("tabId"))
         else:

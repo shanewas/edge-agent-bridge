@@ -31,6 +31,7 @@ MAX_FRAME_PAYLOAD = 16 * 1024 * 1024  # 16 MB
 LOCK_EXEMPT_ACTIONS = frozenset({
     "ping", "status", "tabs", "daemon", "session_start",
     "session_status", "session_stop", "mcp-config", "extension",
+    "history_search", "history_delete",
 })
 PIN_MUTATING_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
 CLOSING_ACTIONS = frozenset({"tab_close", "close_tab"})

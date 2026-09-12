@@ -232,6 +232,14 @@ def main(argv=None) -> int:
     p_session.add_argument("session_action", choices=["start", "status", "stop"])
     p_session.add_argument("--new", action="store_true", help="session start: always mint a fresh token")
 
+    # history
+    p_history = add_cmd("history", help="Search or delete browsing history")
+    p_history.add_argument("history_action", choices=["search", "delete"])
+    p_history.add_argument("query", nargs="?", default="")
+    p_history.add_argument("--max-results", type=int, default=20)
+    p_history.add_argument("--start-time", type=float, default=None)
+    p_history.add_argument("--end-time", type=float, default=None)
+
     # nav
     p_nav = add_cmd("nav", help="Navigate to URL")
     p_nav.add_argument("url")
@@ -377,6 +385,14 @@ def main(argv=None) -> int:
     opt_port = getattr(args, "port", None)
     opt_session = getattr(args, "session", None) or os.environ.get("EDGE_BRIDGE_SESSION")
 
+    # Special handling: history delete without a URL
+    if args.cmd == "history" and args.history_action == "delete" and not args.query:
+        if opt_json:
+            print(json.dumps({"success": False, "code": "bad_params", "error": "history delete requires a URL"}))
+        else:
+            print("Error: 'history delete' requires a URL", file=sys.stderr)
+        return 3
+
     # Special handling: close without --tab
     if args.cmd == "close" and opt_tab is None:
         if opt_json:
@@ -462,6 +478,18 @@ def main(argv=None) -> int:
     elif action == "close":
         action = "tab_close"
         params["tabId"] = opt_tab
+    elif action == "history":
+        if args.history_action == "search":
+            action = "history_search"
+            params["text"] = args.query or ""
+            params["maxResults"] = args.max_results
+            if args.start_time is not None:
+                params["startTime"] = args.start_time
+            if args.end_time is not None:
+                params["endTime"] = args.end_time
+        else:
+            action = "history_delete"
+            params["url"] = args.query
     elif action == "nav":
         params["url"] = args.url
         params["wait"] = "none" if args.no_wait else "load"
@@ -615,6 +643,11 @@ def main(argv=None) -> int:
                     print(f"Saved screenshot: {res['path']}")
                 else:
                     print(f"Screenshot taken ({len(res.get('data', ''))} bytes base64)")
+            elif action == "history_search":
+                items = res.get("items", [])
+                print(f"Found {len(items)} history item(s):")
+                for it in items:
+                    print(f"  {it.get('title', '')[:50]} - {it.get('url')}")
             elif action == "console":
                 entries = res.get("entries", [])
                 print(f"{len(entries)} console entry(ies):")

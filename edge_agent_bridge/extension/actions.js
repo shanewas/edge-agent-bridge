@@ -363,6 +363,31 @@ export async function execute(cmd) {
         return { success: true, files, inputId: mark.id, ...loc.info };
       }
 
+      case "history_search": {
+        const text = p.text !== undefined ? String(p.text) : "";
+        const maxResults = Math.max(1, Math.min(100, Number(p.maxResults ?? p.limit ?? 20) || 20));
+        const query = { text, maxResults };
+        if (p.startTime !== undefined && p.startTime !== null) query.startTime = Number(p.startTime);
+        if (p.endTime !== undefined && p.endTime !== null) query.endTime = Number(p.endTime);
+        try {
+          const items = await chrome.history.search(query);
+          return { success: true, count: items.length, items };
+        } catch (e) {
+          return fail("history_failed", e.message);
+        }
+      }
+
+      case "history_delete": {
+        const url = p.url;
+        if (!url) return fail("bad_params", "history_delete requires url");
+        try {
+          await chrome.history.deleteUrl({ url: String(url) });
+          return { success: true, url: String(url) };
+        } catch (e) {
+          return fail("history_failed", e.message);
+        }
+      }
+
       case "screenshot": {
         const tab = await chrome.tabs.get(tabId);
         const format = p.format === "png" ? "png" : "jpeg";
@@ -771,7 +796,7 @@ export async function execute(cmd) {
 
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
 const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
-const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new"]);
+const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete"]);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};

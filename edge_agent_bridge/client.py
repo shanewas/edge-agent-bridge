@@ -559,6 +559,17 @@ class Edge:
             p["fallback"] = False
         return self.send("upload", p)
 
+    def history_search(self, text: str = "", max_results: int = 20, start_time=None, end_time=None) -> dict:
+        p = {"text": text, "maxResults": max_results}
+        if start_time is not None:
+            p["startTime"] = start_time
+        if end_time is not None:
+            p["endTime"] = end_time
+        return self.send("history_search", p)
+
+    def history_delete(self, url: str) -> dict:
+        return self.send("history_delete", {"url": url})
+
     def scroll(self, x=None, y=None, ref=None, target=None, tab_id=None) -> dict:
         p = {}
         if x is not None:

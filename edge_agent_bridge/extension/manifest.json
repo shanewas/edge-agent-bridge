@@ -10,7 +10,8 @@
     "storage",
     "alarms",
     "debugger",
-    "tabGroups"
+    "tabGroups",
+    "history"
   ],
   "host_permissions": [
     "<all_urls>",
