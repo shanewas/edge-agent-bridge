@@ -1,0 +1,19 @@
+Store listing description (Chrome + Edge) — keyword-spam safe.
+
+Do NOT add third-party product names (assistant apps, editors, model
+brands) to this text. Chrome rejected v1 for "Keyword Spam" over a client
+list; keep the wording generic.
+
+---
+
+Agent Browser Bridge lets an AI coding assistant drive the browser tabs
+you already have open, with your real logged-in sessions and cookies.
+The assistant reads each page as a structured snapshot with stable
+element references, then clicks, types, and fills in forms on your
+behalf. Input goes in as trusted events, so pages treat it like your
+own mouse and keyboard.
+
+Everything runs on your own machine through a local bridge: no cloud
+relay, no accounts, no telemetry. Install the free companion package
+(pip install edge-agent-bridge) and the extension connects to it
+automatically.
