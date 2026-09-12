@@ -155,3 +155,27 @@ def test_cli_group_ungroup_without_tabs_exits_3(daemon):
     env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
     code, out, err = run_cli(["group", "ungroup"], env=env)
     assert code == 3
+
+
+def test_cli_group_move_noninteger_tabs_exits_3(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["group", "move", "abc"], env=env)
+    assert code == 3
+    assert "integers" in err
+
+
+def test_cli_group_ungroup_noninteger_tabs_exits_3(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["group", "ungroup", "1", "xyz"], env=env)
+    assert code == 3
+    assert "integers" in err
+
+
+def test_cli_group_move_noninteger_tabs_json(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "group", "move", "abc"], env=env)
+    assert code == 3
+    body = json.loads(out)
+    assert body["success"] is False
+    assert body["code"] == "bad_params"
+    assert "integers" in body["error"]

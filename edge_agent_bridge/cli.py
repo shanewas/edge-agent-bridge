@@ -410,6 +410,17 @@ def main(argv=None) -> int:
             print(f"Error: 'group {args.group_action}' requires tab IDs", file=sys.stderr)
         return 3
 
+    # Special handling: group move/ungroup with non-integer tab IDs
+    if args.cmd == "group" and args.group_action in ("move", "ungroup") and args.tabs:
+        try:
+            [int(t) for t in args.tabs]
+        except ValueError:
+            if opt_json:
+                print(json.dumps({"success": False, "code": "bad_params", "error": f"group {args.group_action} tab IDs must be integers"}))
+            else:
+                print(f"Error: 'group {args.group_action}' tab IDs must be integers", file=sys.stderr)
+            return 3
+
     # Special handling: close without --tab
     if args.cmd == "close" and opt_tab is None:
         if opt_json:

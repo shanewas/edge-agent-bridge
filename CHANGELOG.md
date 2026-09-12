@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.0
+
+- Browsing history: `edge-bridge history "query"` searches titles/URLs with `--max-results`,
+  `--start-time`/`--end-time`; `history delete <url>` removes one entry. MCP tools
+  `edge_history_search` / `edge_history_delete`. Requires the `history` permission
+  (already declared in the manifest).
+- Tab groups: `edge-bridge group list [--window-id N]`, `group move <tab ids>
+  [--group-id N] [--title T] [--color C]` (new group when `--group-id` is omitted),
+  `group ungroup <tab ids>`. MCP tools `edge_group_list` / `edge_group_move` /
+  `edge_group_ungroup`. 34 MCP tools total.
+- CLI rejects non-integer tab IDs for `group move`/`ungroup` with exit code 3
+  instead of a traceback.
+
 ## 2.1.0
 
 - Daemon-side tab sessions: `edge-bridge session start/status/stop`, `--session` /

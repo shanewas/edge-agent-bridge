@@ -1,7 +1,7 @@
 # Edge Agent Bridge
 
 [![PyPI - Version](https://img.shields.io/pypi/v/edge-agent-bridge?color=0078D4&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/edge-agent-bridge/)
-[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v2.0.1-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
+[![Edge Add-ons](https://img.shields.io/badge/Edge%20Add--ons-v2.2.0-0078D4?logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)
 [![GitHub Release](https://img.shields.io/github/v/release/shanewas/edge-agent-bridge?color=2ea44f&logo=github&label=Release)](https://github.com/shanewas/edge-agent-bridge/releases/latest)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/edge-agent-bridge?color=3776AB&logo=python&logoColor=white)](https://pypi.org/project/edge-agent-bridge/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/shanewas/edge-agent-bridge/blob/main/LICENSE)
@@ -30,7 +30,7 @@ none are claimed.
 pip install edge-agent-bridge
 ```
 
-Python 3.10 or newer. No third-party packages, at install time or at runtime.
+Python 3.10 or newer, with no third-party packages at install time or runtime.
 
 Then install the companion extension directly from the
 **[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Agent Browser Bridge**), or load it unpacked while you're developing:
@@ -49,7 +49,7 @@ edge-bridge daemon status
 
 ```text
 Daemon: running on 127.0.0.1:18999 (PID 24188)
-Extension: 2.0.1 (connected)
+Extension: 2.2.0 (connected)
 ```
 
 CLI commands and Python's `with Edge()` start the daemon on first use if it isn't running, but
@@ -74,7 +74,7 @@ edge-bridge mcp-config --client claude
 edge-bridge mcp-config --client cursor
 ```
 
-The server speaks stdio JSON-RPC and exposes 29 tools, all prefixed `edge_` so they don't collide
+The server speaks stdio JSON-RPC and exposes 34 tools, all prefixed `edge_` so they don't collide
 with Playwright MCP in a mixed setup. [`docs/agent-guide.md`](docs/agent-guide.md) is written for
 the agent rather than for you: snapshot first, act by ref, re-snapshot after navigation.
 
@@ -149,6 +149,11 @@ edge-bridge console                       # console output, exceptions, dialogs
 edge-bridge nav https://example.com
 edge-bridge new https://example.com --group Agent
 edge-bridge close --tab 1459
+edge-bridge history "quarterly report"     # search titles/URLs; --max-results, --start-time/--end-time
+edge-bridge history delete https://example.com/page
+edge-bridge group list                     # tab groups; --window-id filters
+edge-bridge group move 1459 1460 --title Agent --color blue   # omit --group-id for a new group
+edge-bridge group ungroup 1459
 edge-bridge batch '[{"action":"click","target":"e5"},{"action":"sleep","ms":50},{"action":"fill","target":"e1","text":"spec"}]'
 edge-bridge session start               # prints sessionToken=<uuid>; --new always mints
 edge-bridge session status --session <uuid>
@@ -181,28 +186,28 @@ edge> click "Pull requests"
 ## Security model
 
 The trust boundary is your OS user account. Anything running as you can already read your files and
-your browser profile, so the daemon does not try to defend against it.
+your browser profile, so the daemon doesn't try to defend against it.
 
 - The daemon binds `127.0.0.1` only, and checks the `Host` header against the loopback names so a
   DNS rebinding attempt gets a 421 rather than a command.
 - `/exec` requires the token written to the data directory at first start, mode 0600 on POSIX.
   A request carrying an `Origin` or `Sec-Fetch-*` header is refused outright, so a page you are
-  browsing cannot reach the daemon even if it guesses the token.
+  browsing can't reach the daemon even if it guesses the token.
 - `/ws` requires an `Origin` beginning `chrome-extension://`, which keeps stray local clients off
-  the extension channel. A second OS user on a shared machine could forge that header. If that is
+  the extension channel, though a second OS user on a shared machine could forge that header. If that is
   your situation, run `edge-bridge daemon start --require-pairing` and paste the token into the
   extension popup once; unpaired sockets are then rejected.
 - WebSocket frames above 16 MB close the connection, and the socket carries a read timeout, so a
-  local client cannot make the daemon buffer without bound or pin a worker thread forever.
-- Nothing leaves the machine. There is no telemetry and no outbound request of any kind.
+  local client can't make the daemon buffer without bound or pin a worker thread forever.
+- Nothing leaves the machine: no telemetry, no outbound requests of any kind.
 
-`eval` runs arbitrary JavaScript in the page, with your session. It is meant to be there, and it is
+`eval` runs arbitrary JavaScript in the page with your session. It's there on purpose, and it's
 the reason to think about which agent you hand this to. Actions that destroy state need an explicit
 tab id: `tab_close` without one is an error rather than a guess.
 
 The extension asks for `debugger`, which is what makes input trusted and screenshots possible.
-While it is attached, Edge shows its "is debugging this browser" bar. That bar is a Chromium policy
-and cannot be dismissed from an extension.
+While it is attached, Edge shows its "is debugging this browser" bar under a Chromium policy
+no extension can dismiss.
 
 ---
 
@@ -239,8 +244,8 @@ python scripts/build_extension.py  # syncs the manifest version, zips to dist/
 ```
 
 The hermetic suite runs a real daemon against a fake extension over a real WebSocket, so it covers
-the wire protocol without Edge installed. CI runs both suites on Windows, Linux and macOS.
-Releases are automated, see [`docs/release.md`](docs/release.md).
+the wire protocol without Edge installed, while CI runs both suites on Windows, Linux and
+macOS; releases are automated, see [`docs/release.md`](docs/release.md).
 
 ---
 
