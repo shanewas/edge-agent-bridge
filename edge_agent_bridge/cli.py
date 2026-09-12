@@ -402,18 +402,17 @@ def main(argv=None) -> int:
             print("Error: 'history delete' requires a URL", file=sys.stderr)
         return 3
 
-    # Special handling: group move/ungroup without tab IDs
-    if args.cmd == "group" and args.group_action in ("move", "ungroup") and not args.tabs:
-        if opt_json:
-            print(json.dumps({"success": False, "code": "bad_params", "error": f"group {args.group_action} requires tab IDs"}))
-        else:
-            print(f"Error: 'group {args.group_action}' requires tab IDs", file=sys.stderr)
-        return 3
-
-    # Special handling: group move/ungroup with non-integer tab IDs
-    if args.cmd == "group" and args.group_action in ("move", "ungroup") and args.tabs:
+    # Special handling: group move/ungroup requires integer tab IDs
+    if args.cmd == "group" and args.group_action in ("move", "ungroup"):
+        if not args.tabs:
+            if opt_json:
+                print(json.dumps({"success": False, "code": "bad_params", "error": f"group {args.group_action} requires tab IDs"}))
+            else:
+                print(f"Error: 'group {args.group_action}' requires tab IDs", file=sys.stderr)
+            return 3
         try:
-            [int(t) for t in args.tabs]
+            for t in args.tabs:
+                int(t)
         except ValueError:
             if opt_json:
                 print(json.dumps({"success": False, "code": "bad_params", "error": f"group {args.group_action} tab IDs must be integers"}))

@@ -1,24 +1,7 @@
 """Tests for edge_agent_bridge.cli."""
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-import pytest
-from edge_agent_bridge import config
 from tests.fake_extension import FakeExtension
-from tests.support import DaemonHandle, free_port
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def run_cli(args, env=None):
-    e = dict(os.environ)
-    if env:
-        e.update(env)
-    cmd = [sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args
-    res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True)
-    return res.returncode, res.stdout.strip(), res.stderr.strip()
+from tests.support import free_port, run_cli
 
 
 def test_cli_json_ping_exits_0(daemon, fake_ext):

@@ -844,9 +844,7 @@ export async function execute(cmd) {
 
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
 const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
-const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete"]);
-// Group actions carry their own tab ids (or none), so they dispatch without a resolved tab.
-for (const a of ["group_list", "group_move", "group_ungroup"]) TABLESS.add(a);
+const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete", "group_list", "group_move", "group_ungroup"]);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};
