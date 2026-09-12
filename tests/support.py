@@ -1,4 +1,4 @@
-"""Shared helpers for hermetic and E2E tests: a daemon subprocess handle and a free-port helper."""
+"""Shared helpers for hermetic and E2E tests: daemon handle, free port, CLI runner, recording client."""
 import http.client
 import json
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 from edge_agent_bridge import config  # noqa: E402
+from edge_agent_bridge.client import Edge  # noqa: E402
 
 
 def edge_binary():
@@ -119,3 +120,24 @@ class DaemonHandle:
         self.stop()
         time.sleep(0.2)
         return self.start()
+
+def run_cli(args, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    cmd = [sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args
+    res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True)
+    return res.returncode, res.stdout.strip(), res.stderr.strip()
+
+
+def recording_edge():
+    seen = {}
+    edge = Edge(pin=False, auto_start=False)
+
+    def fake_send(action, params=None, timeout=None):
+        seen["action"] = action
+        seen["params"] = params
+        return {"success": True}
+
+    edge.send = fake_send
+    return edge, seen

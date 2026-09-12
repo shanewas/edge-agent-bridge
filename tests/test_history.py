@@ -1,60 +1,31 @@
 """Tests for history_search / history_delete (param building + CLI parsing)."""
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-from edge_agent_bridge.client import Edge
 from tests.fake_extension import FakeExtension
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def run_cli(args, env=None):
-    e = dict(os.environ)
-    if env:
-        e.update(env)
-    cmd = [sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args
-    res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True)
-    return res.returncode, res.stdout.strip(), res.stderr.strip()
-
-
-def _recording_edge():
-    seen = {}
-    edge = Edge(pin=False, auto_start=False)
-
-    def fake_send(action, params=None, timeout=None):
-        seen["action"] = action
-        seen["params"] = params
-        return {"success": True}
-
-    edge.send = fake_send
-    return edge, seen
+from tests.support import recording_edge, run_cli
 
 
 def test_history_search_param_building():
-    edge, seen = _recording_edge()
+    edge, seen = recording_edge()
     edge.history_search("example", max_results=5)
     assert seen["action"] == "history_search"
     assert seen["params"] == {"text": "example", "maxResults": 5}
 
 
 def test_history_search_defaults():
-    edge, seen = _recording_edge()
+    edge, seen = recording_edge()
     edge.history_search()
     assert seen["action"] == "history_search"
     assert seen["params"] == {"text": "", "maxResults": 20}
 
 
 def test_history_search_time_bounds():
-    edge, seen = _recording_edge()
+    edge, seen = recording_edge()
     edge.history_search("x", start_time=1000.0, end_time=2000.0)
     assert seen["params"] == {"text": "x", "maxResults": 20, "startTime": 1000.0, "endTime": 2000.0}
 
 
 def test_history_delete_param_building():
-    edge, seen = _recording_edge()
+    edge, seen = recording_edge()
     edge.history_delete("http://example.com/")
     assert seen["action"] == "history_delete"
     assert seen["params"] == {"url": "http://example.com/"}
