@@ -240,6 +240,15 @@ def main(argv=None) -> int:
     p_history.add_argument("--start-time", type=float, default=None)
     p_history.add_argument("--end-time", type=float, default=None)
 
+    # group
+    p_group = add_cmd("group", help="List or manage tab groups")
+    p_group.add_argument("group_action", choices=["list", "move", "ungroup"])
+    p_group.add_argument("tabs", nargs="*", default=[], help="Tab IDs to move or ungroup")
+    p_group.add_argument("--group-id", type=int, default=None)
+    p_group.add_argument("--title", default=None)
+    p_group.add_argument("--color", default=None)
+    p_group.add_argument("--window-id", type=int, default=None)
+
     # nav
     p_nav = add_cmd("nav", help="Navigate to URL")
     p_nav.add_argument("url")
@@ -393,6 +402,14 @@ def main(argv=None) -> int:
             print("Error: 'history delete' requires a URL", file=sys.stderr)
         return 3
 
+    # Special handling: group move/ungroup without tab IDs
+    if args.cmd == "group" and args.group_action in ("move", "ungroup") and not args.tabs:
+        if opt_json:
+            print(json.dumps({"success": False, "code": "bad_params", "error": f"group {args.group_action} requires tab IDs"}))
+        else:
+            print(f"Error: 'group {args.group_action}' requires tab IDs", file=sys.stderr)
+        return 3
+
     # Special handling: close without --tab
     if args.cmd == "close" and opt_tab is None:
         if opt_json:
@@ -490,6 +507,23 @@ def main(argv=None) -> int:
         else:
             action = "history_delete"
             params["url"] = args.query
+    elif action == "group":
+        if args.group_action == "list":
+            action = "group_list"
+            if args.window_id is not None:
+                params["windowId"] = args.window_id
+        elif args.group_action == "move":
+            action = "group_move"
+            params["tabIds"] = [int(t) for t in args.tabs]
+            if args.group_id is not None:
+                params["groupId"] = args.group_id
+            if args.title is not None:
+                params["title"] = args.title
+            if args.color is not None:
+                params["color"] = args.color
+        else:
+            action = "group_ungroup"
+            params["tabIds"] = [int(t) for t in args.tabs]
     elif action == "nav":
         params["url"] = args.url
         params["wait"] = "none" if args.no_wait else "load"
@@ -648,6 +682,11 @@ def main(argv=None) -> int:
                 print(f"Found {len(items)} history item(s):")
                 for it in items:
                     print(f"  {it.get('title', '')[:50]} - {it.get('url')}")
+            elif action == "group_list":
+                groups = res.get("groups", [])
+                print(f"{len(groups)} group(s):")
+                for g in groups:
+                    print(f"  [{g.get('id')}] {g.get('title', '')} ({g.get('color', '')})")
             elif action == "console":
                 entries = res.get("entries", [])
                 print(f"{len(entries)} console entry(ies):")

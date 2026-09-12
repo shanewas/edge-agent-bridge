@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) server for Edge Agent Bridge.
 
-Implements MCP stdio transport (spec 2025-11-25) exposing 31 browser automation tools.
+Implements MCP stdio transport (spec 2025-11-25) exposing 34 browser automation tools.
 """
 import json
 import logging
@@ -391,6 +391,44 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "edge_group_list",
+        "description": "List open tab groups with their titles, colors, and window IDs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "windowId": {"type": "integer", "description": "Only list groups in this window."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+        },
+    },
+    {
+        "name": "edge_group_move",
+        "description": "Move tabs into a tab group (existing groupId, or a new group with optional title/color).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tabIds": {"type": "array", "items": {"type": "integer"}, "description": "IDs of tabs to group."},
+                "groupId": {"type": "integer", "description": "Existing group ID to move into. Omit to create a new group."},
+                "title": {"type": "string", "description": "Title to set on the group."},
+                "color": {"type": "string", "description": "Color to set on the group (grey, blue, red, yellow, green, pink, purple, cyan, orange)."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+            "required": ["tabIds"],
+        },
+    },
+    {
+        "name": "edge_group_ungroup",
+        "description": "Remove tabs from their tab group(s).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tabIds": {"type": "array", "items": {"type": "integer"}, "description": "IDs of tabs to ungroup."},
+                **COMMON_TOOL_PROPERTIES,
+            },
+            "required": ["tabIds"],
+        },
+    },
+    {
         "name": "edge_batch",
         "description": "Execute a list of action steps sequentially in a single call.",
         "inputSchema": {
@@ -616,6 +654,17 @@ def handle(msg: dict, edge: Edge) -> dict | None:
             )
         elif tool_name == "edge_history_delete":
             res = edge.history_delete(url=args.get("url", ""))
+        elif tool_name == "edge_group_list":
+            res = edge.group_list(window_id=args.get("windowId"))
+        elif tool_name == "edge_group_move":
+            res = edge.group_move(
+                tab_ids=args.get("tabIds", []),
+                group_id=args.get("groupId"),
+                title=args.get("title"),
+                color=args.get("color"),
+            )
+        elif tool_name == "edge_group_ungroup":
+            res = edge.group_ungroup(tab_ids=args.get("tabIds", []))
         elif tool_name == "edge_batch":
             res = edge.batch(steps=args.get("steps", []), tab_id=args.get("tabId"))
         else:

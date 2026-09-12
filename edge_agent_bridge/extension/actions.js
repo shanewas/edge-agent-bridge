@@ -304,6 +304,54 @@ export async function execute(cmd) {
         return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
       }
 
+      case "group_list": {
+        try {
+          const query = (p.windowId !== undefined && p.windowId !== null) ? { windowId: Number(p.windowId) } : {};
+          const groups = await chrome.tabGroups.query(query);
+          return {
+            success: true,
+            count: groups.length,
+            groups: groups.map(g => ({ id: g.id, title: g.title, color: g.color, collapsed: g.collapsed, windowId: g.windowId }))
+          };
+        } catch (e) {
+          return fail("group_failed", e.message);
+        }
+      }
+
+      case "group_move": {
+        const rawIds = p.tabIds !== undefined ? p.tabIds : (p.tabId !== undefined ? [p.tabId] : []);
+        const tabIds = (Array.isArray(rawIds) ? rawIds : [rawIds]).map(Number).filter(n => !Number.isNaN(n));
+        if (!tabIds.length) return fail("bad_params", "group_move requires tabIds: [tab ids]");
+        try {
+          let groupId;
+          if (p.groupId !== undefined && p.groupId !== null && p.groupId !== "") {
+            groupId = await chrome.tabs.group({ tabIds, groupId: Number(p.groupId) });
+          } else {
+            groupId = await chrome.tabs.group({ tabIds });
+          }
+          const props = {};
+          if (p.title !== undefined) props.title = String(p.title);
+          if (p.color !== undefined) props.color = String(p.color);
+          if (Object.keys(props).length) await chrome.tabGroups.update(groupId, props);
+          const g = await chrome.tabGroups.get(groupId);
+          return { success: true, groupId, tabIds, group: { id: g.id, title: g.title, color: g.color, collapsed: g.collapsed, windowId: g.windowId } };
+        } catch (e) {
+          return fail("group_failed", e.message);
+        }
+      }
+
+      case "group_ungroup": {
+        const rawIds = p.tabIds !== undefined ? p.tabIds : (p.tabId !== undefined ? [p.tabId] : []);
+        const tabIds = (Array.isArray(rawIds) ? rawIds : [rawIds]).map(Number).filter(n => !Number.isNaN(n));
+        if (!tabIds.length) return fail("bad_params", "group_ungroup requires tabIds: [tab ids]");
+        try {
+          await chrome.tabs.ungroup(tabIds);
+          return { success: true, tabIds };
+        } catch (e) {
+          return fail("group_failed", e.message);
+        }
+      }
+
       case "back":
       case "forward":
       case "reload": {
@@ -797,6 +845,8 @@ export async function execute(cmd) {
 // Read-only or dialog-handling actions skip the per-tab queue so they work while a command is blocked on a dialog.
 const NOQUEUE = new Set(["console", "dialog", "tab", "get_active_tab"]);
 const TABLESS = new Set(["ping", "status", "tabs", "list_tabs", "reload_extension", "batch", "tab_switch", "switch_tab", "tab_close", "close_tab", "tab_new", "history_search", "history_delete"]);
+// Group actions carry their own tab ids (or none), so they dispatch without a resolved tab.
+for (const a of ["group_list", "group_move", "group_ungroup"]) TABLESS.add(a);
 
 export async function dispatch(cmd) {
   const p = cmd.params || {};

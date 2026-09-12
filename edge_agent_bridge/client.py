@@ -570,6 +570,27 @@ class Edge:
     def history_delete(self, url: str) -> dict:
         return self.send("history_delete", {"url": url})
 
+    def group_list(self, window_id=None) -> dict:
+        p = {}
+        if window_id is not None:
+            p["windowId"] = window_id
+        return self.send("group_list", p)
+
+    def group_move(self, tab_ids, group_id=None, title=None, color=None) -> dict:
+        ids = list(tab_ids) if isinstance(tab_ids, (list, tuple)) else [tab_ids]
+        p = {"tabIds": ids}
+        if group_id is not None:
+            p["groupId"] = group_id
+        if title is not None:
+            p["title"] = title
+        if color is not None:
+            p["color"] = color
+        return self.send("group_move", p)
+
+    def group_ungroup(self, tab_ids) -> dict:
+        ids = list(tab_ids) if isinstance(tab_ids, (list, tuple)) else [tab_ids]
+        return self.send("group_ungroup", {"tabIds": ids})
+
     def scroll(self, x=None, y=None, ref=None, target=None, tab_id=None) -> dict:
         p = {}
         if x is not None:

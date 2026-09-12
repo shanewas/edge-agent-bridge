@@ -78,10 +78,10 @@ def test_mcp_notifications_and_ping(mcp_proc):
     assert resp["result"] == {}
 
 
-def test_mcp_tools_list_31_tools(mcp_proc):
+def test_mcp_tools_list_34_tools(mcp_proc):
     resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = resp["result"]["tools"]
-    assert len(tools) == 31
+    assert len(tools) == 34
     for t in tools:
         assert t["name"].startswith("edge_")
         assert t["description"]
