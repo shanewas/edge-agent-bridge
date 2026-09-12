@@ -235,19 +235,19 @@ def main(argv=None) -> int:
     # history
     p_history = add_cmd("history", help="Search or delete browsing history")
     p_history.add_argument("history_action", choices=["search", "delete"])
-    p_history.add_argument("query", nargs="?", default="")
-    p_history.add_argument("--max-results", type=int, default=20)
-    p_history.add_argument("--start-time", type=float, default=None)
-    p_history.add_argument("--end-time", type=float, default=None)
+    p_history.add_argument("query", nargs="?", default="", help="Search text or URL to delete")
+    p_history.add_argument("--max-results", type=int, default=20, help="history search: max results (default 20)")
+    p_history.add_argument("--start-time", type=float, default=None, help="history search: only items after this time (ms since epoch)")
+    p_history.add_argument("--end-time", type=float, default=None, help="history search: only items before this time (ms since epoch)")
 
     # group
     p_group = add_cmd("group", help="List or manage tab groups")
     p_group.add_argument("group_action", choices=["list", "move", "ungroup"])
     p_group.add_argument("tabs", nargs="*", default=[], help="Tab IDs to move or ungroup")
-    p_group.add_argument("--group-id", type=int, default=None)
-    p_group.add_argument("--title", default=None)
-    p_group.add_argument("--color", default=None)
-    p_group.add_argument("--window-id", type=int, default=None)
+    p_group.add_argument("--group-id", type=int, default=None, help="group move: existing group ID (omit for a new group)")
+    p_group.add_argument("--title", default=None, help="group move: title for the group")
+    p_group.add_argument("--color", default=None, help="group move: color (grey, blue, red, yellow, green, pink, purple, cyan, orange)")
+    p_group.add_argument("--window-id", type=int, default=None, help="group list: only this window")
 
     # nav
     p_nav = add_cmd("nav", help="Navigate to URL")

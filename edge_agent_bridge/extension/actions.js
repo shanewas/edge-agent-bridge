@@ -321,7 +321,7 @@ export async function execute(cmd) {
       case "group_move": {
         const rawIds = p.tabIds !== undefined ? p.tabIds : (p.tabId !== undefined ? [p.tabId] : []);
         const tabIds = (Array.isArray(rawIds) ? rawIds : [rawIds]).map(Number).filter(n => !Number.isNaN(n));
-        if (!tabIds.length) return fail("bad_params", "group_move requires tabIds: [tab ids]");
+        if (!tabIds.length) return fail("bad_params", "group_move requires tabIds");
         try {
           let groupId;
           if (p.groupId !== undefined && p.groupId !== null && p.groupId !== "") {
@@ -343,7 +343,7 @@ export async function execute(cmd) {
       case "group_ungroup": {
         const rawIds = p.tabIds !== undefined ? p.tabIds : (p.tabId !== undefined ? [p.tabId] : []);
         const tabIds = (Array.isArray(rawIds) ? rawIds : [rawIds]).map(Number).filter(n => !Number.isNaN(n));
-        if (!tabIds.length) return fail("bad_params", "group_ungroup requires tabIds: [tab ids]");
+        if (!tabIds.length) return fail("bad_params", "group_ungroup requires tabIds");
         try {
           await chrome.tabs.ungroup(tabIds);
           return { success: true, tabIds };

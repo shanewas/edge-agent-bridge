@@ -33,7 +33,7 @@ pip install edge-agent-bridge
 Python 3.10 or newer, with no third-party packages at install time or runtime.
 
 Then install the companion extension directly from the
-**[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Agent Browser Bridge**), or load it unpacked while you're developing:
+**[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Edge Agent Bridge**), or load it unpacked while you're developing:
 
 ```bash
 edge-bridge extension open     # opens the bundled extension directory
@@ -149,7 +149,7 @@ edge-bridge console                       # console output, exceptions, dialogs
 edge-bridge nav https://example.com
 edge-bridge new https://example.com --group Agent
 edge-bridge close --tab 1459
-edge-bridge history "quarterly report"     # search titles/URLs; --max-results, --start-time/--end-time
+edge-bridge history search "quarterly report"  # search titles/URLs; --max-results, --start-time/--end-time
 edge-bridge history delete https://example.com/page
 edge-bridge group list                     # tab groups; --window-id filters
 edge-bridge group move 1459 1460 --title Agent --color blue   # omit --group-id for a new group

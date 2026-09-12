@@ -81,6 +81,8 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `deadline_exceeded` | extension passed `deadlineMs` | retry (locks/deadlines reset), split long writes |
 | `write_mismatch` | readback differs after retry | report expected vs readback, stop |
 | `exhausted_fallback` | ref→text→scan→coords all failed | read `tried`, snapshot, new approach |
+| `history_failed` | history query failed in the extension | report `error`, retry once |
+| `group_failed` | tab-group call failed in the extension | report `error`, check tab IDs |
 
 ## Setup (once per machine)
 
@@ -108,6 +110,16 @@ edge-bridge session stop             # drop it server-side
 Forgetting `--tab` is harmless inside a session: the daemon injects your pinned tab. An explicit `--tab` is a one-shot override and never changes the pin. Only `switch` and `new` re-pin. MCP clients get an implicit session per process automatically. If your tab closes, the session goes sticky `tab_closed` — every tab-scoped call fails until `switch`/`new`. There is no shared default session: two agents MUST use distinct tokens or they share one pin.
 
 Multi-agent etiquette: own tab each. Per-tab locks serialize writers as defense-in-depth, not as an excuse to share a tab.
+
+## History and tab groups (v2.2.0+)
+
+`edge_history_search {text, maxResults?, startTime?, endTime?}` searches titles and URLs
+(`startTime`/`endTime` are ms since epoch); `edge_history_delete {url}` removes one entry.
+`edge_group_list {windowId?}` lists tab groups; `edge_group_move {tabIds, groupId?, title?, color?}`
+moves tabs into an existing group, or a new one when `groupId` is omitted;
+`edge_group_ungroup {tabIds}` removes tabs from their groups. CLI mirrors:
+`edge-bridge history search "query"`, `history delete <url>`, `group list [--window-id N]`,
+`group move <tab ids> [--group-id N] [--title T] [--color C]`, `group ungroup <tab ids>`.
 
 ## Verified writes: `match`, `write_mismatch`, `focus_stolen`
 
