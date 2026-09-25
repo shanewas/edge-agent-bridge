@@ -66,3 +66,25 @@ def test_highlight_ring_appears_and_fades(client):
     assert client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is True
     time.sleep(0.6)
     assert client("eval", {"code": "!!document.getElementById('__eab_ring')"})["result"] is False
+
+
+def test_below_fold_target_reached(client, pages):
+    assert client("nav", {"url": pages + "/deep.html"})["success"]
+    snap = client("snapshot")["text"]
+    ref = ref_of(snap, "button", "Deep target")
+    r = client("click", {"ref": ref})
+    assert r["success"], r
+    assert client("eval", {"code": "document.getElementById('deep-btn').dataset.clicked"})["result"] == "true"
+
+
+def test_covered_target_reports_click_covered(client, pages):
+    assert client("nav", {"url": pages + "/sticky.html"})["success"]
+    snap = client("snapshot")["text"]
+    ref = ref_of(snap, "button", "Covered target")
+    r = client("click", {"ref": ref, "timeout": 2000})
+    assert r["success"] is False and r["code"] == "click_covered", r
+    assert client("eval", {"code": "document.getElementById('covered-btn').dataset.clicked || 'unset'"})["result"] == "unset"
+    client("eval", {"code": "document.getElementById('banner').remove()"})
+    r = client("click", {"ref": ref})
+    assert r["success"], r
+    assert client("eval", {"code": "document.getElementById('covered-btn').dataset.clicked"})["result"] == "true"

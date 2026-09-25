@@ -121,12 +121,13 @@ class DaemonHandle:
         time.sleep(0.2)
         return self.start()
 
-def run_cli(args, env=None):
+def run_cli(args, env=None, input_text=None):
     e = dict(os.environ)
     if env:
         e.update(env)
     cmd = [sys.executable, "-u", "-m", "edge_agent_bridge.cli"] + args
-    res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True)
+    res = subprocess.run(cmd, cwd=ROOT, env=e, capture_output=True, text=True,
+                         input=input_text)
     return res.returncode, res.stdout.strip(), res.stderr.strip()
 
 

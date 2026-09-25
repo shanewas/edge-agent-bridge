@@ -103,6 +103,34 @@
       padding: 6px 10px;
       cursor: pointer;
     }
+    .btn-row {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-row button {
+      flex: 1;
+      background: #2d2d2d;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .btn-row button:hover {
+      background: #3a3a3a;
+    }
+    .err-box {
+      background: #2a1515;
+      border-radius: 6px;
+      padding: 8px;
+      border: 1px solid #5c1d1d;
+      font-family: monospace;
+      font-size: 11px;
+      color: #fca5a5;
+      max-height: 90px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
     .footer {
       font-size: 11px;
       color: #777;
@@ -122,13 +150,26 @@
     <div class="info-box">http://127.0.0.1:18999<br><span id="versions">checking…</span></div>
   </div>
 
-  <div id="outdated" class="section warn">The daemon needs a newer extension. Update it from the Edge Add-ons store, or reload the unpacked extension.</div>
+  <div id="outdated" class="section warn">The daemon needs a newer extension. Update it from the <a href="https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd" target="_blank" style="color: #fca5a5;">Edge Add-ons store</a>, or reload the unpacked extension.</div>
+
+  <div id="errSection" class="section" style="display: none;">
+    <div class="label">Last error</div>
+    <div id="errBox" class="err-box"></div>
+  </div>
 
   <div id="pairing" class="section pairing">
     <div class="label">Pairing token</div>
-    <input id="pairToken" type="text" placeholder="paste the token from edge-bridge status" autocomplete="off">
+    <input id="pairToken" type="text" placeholder="paste the token from the daemon data dir" autocomplete="off">
     <button id="pairSave">Save and reconnect</button>
     <div id="pairMsg" class="label"></div>
+  </div>
+
+  <div class="section">
+    <div class="btn-row">
+      <button id="reconnectBtn">Reconnect</button>
+      <button id="diagBtn">Copy diagnostics</button>
+    </div>
+    <div id="actionMsg" class="label" style="margin-top: 4px;"></div>
   </div>
 
   <div class="section">

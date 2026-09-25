@@ -54,3 +54,24 @@ def test_elements_returns_coordinates_and_refs(client):
     assert any(e["ref"] and e["x"] > 0 and e["w"] > 0 for e in els)
     filtered = client("elements", {"filter": "open"})["elements"]
     assert filtered and all("open" in (e["name"] or "").lower() or "open" in (e["id"] or "").lower() for e in filtered)
+
+
+def test_snapshot_reports_truncation_and_total(client):
+    r = client("snapshot")
+    assert r["success"] and r["truncated"] is False, r
+    assert r["total"] == r["refs"] and r["total"] >= 10
+    r = client("snapshot", {"maxNodes": 3})
+    assert r["success"] and r["truncated"] is True, r
+    assert r["refs"] == 3
+    assert r["total"] > r["refs"]
+    assert "more nodes" in r["text"]
+    r = client("snapshot", {"maxNodes": 0})
+    assert r["success"] and r["truncated"] is False, r
+
+
+def test_compact_mode_lists_refs_without_values(client):
+    r = client("snapshot", {"mode": "compact"})
+    assert r["success"], r
+    assert re.search(r'^e\d+ button "Verify"$', r["text"], re.M), r["text"]
+    assert "value=" not in r["text"]
+    assert "heading" not in r["text"]

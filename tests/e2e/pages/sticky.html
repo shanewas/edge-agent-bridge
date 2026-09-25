@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sticky fixture</title>
+  <style>
+    #banner { position: fixed; left: 0; right: 0; bottom: 0; height: 50vh;
+              background: rgba(0,0,0,0.5); z-index: 1000; }
+    #page { height: 120vh; }
+  </style>
+</head>
+<body>
+  <h1>Sticky fixture</h1>
+  <div id="page">tall page</div>
+  <button type="button" id="covered-btn">Covered target</button>
+  <div id="banner">cookie banner</div>
+  <script>
+    document.getElementById("covered-btn").addEventListener("click", function () {
+      this.setAttribute("data-clicked", "true");
+    });
+  </script>
+</body>
+</html>

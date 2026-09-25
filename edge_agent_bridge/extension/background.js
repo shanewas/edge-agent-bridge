@@ -72,6 +72,16 @@ function connectWebSocket(force = false) {
         } catch (err) {
           result = { success: false, code: "internal_error", error: err.message };
         }
+        if (result && result.success === false) {
+          try {
+            chrome.storage.local.set({ lastError: {
+              code: result.code || "error",
+              error: String(result.error || "").slice(0, 300),
+              action: msg.action,
+              at: new Date().toLocaleTimeString(),
+            }});
+          } catch (e) {}
+        }
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ id: msg.id, result: result || {} }));
         } else {

@@ -15,6 +15,8 @@ from pathlib import Path
 from . import __version__, config
 from .client import Edge, EdgeClient, send_cmd, ensure_bridge_running
 
+EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd"
+
 # Force UTF-8 on Windows
 if sys.platform == "win32":
     try:
@@ -68,10 +70,8 @@ def _handle_daemon_cmd(args, port: int) -> int:
 
     elif sub == "status":
         with Edge(port=port, auto_start=False) as client:
-            st = client.status()
+            st, pid = _status_data(client, port)
         if st.get("bridge_running"):
-            pid_file = config.pid_path()
-            pid = pid_file.read_text(encoding="utf-8").strip() if pid_file.exists() else "?"
             print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
             print(f"Extension: {st.get('extension_version', 'none')} ({'connected' if st.get('websocket_active') else 'disconnected'})")
             return 0
@@ -80,6 +80,195 @@ def _handle_daemon_cmd(args, port: int) -> int:
             return 2
 
     return 3
+
+
+def _status_data(edge: Edge, port: int):
+    """Fetch /status plus the pid-file pid. Both status verbs share this."""
+    res = edge.status()
+    pid = "?"
+    try:
+        pid_file = config.pid_path()
+        if pid_file.exists():
+            pid = pid_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return res, pid
+
+
+def _handle_doctor(port: int, opt_json: bool) -> int:
+    checks = []
+
+    def add(name, ok, detail, fix=""):
+        checks.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
+
+    with Edge(port=port, auto_start=False) as edge:
+        try:
+            st = edge.status()
+        except Exception as e:
+            st = {"success": False, "code": "daemon_unreachable", "error": str(e)}
+    up = bool(st.get("bridge_running"))
+    add("daemon", up,
+        f"reachable on 127.0.0.1:{port}" if up else "not running",
+        "" if up else "edge-bridge daemon start")
+
+    tok_p = config.token_path()
+    if tok_p.exists():
+        if sys.platform == "win32":
+            add("token", True, f"present at {tok_p}", "")
+        else:
+            mode = oct(os.stat(tok_p).st_mode & 0o777)
+            ok = mode == "0o600"
+            add("token", ok, f"{tok_p} mode {mode}",
+                "" if ok else f"delete {tok_p} and run: edge-bridge daemon start")
+    else:
+        add("token", False, f"missing at {tok_p}",
+            "edge-bridge daemon start (creates it on first start)")
+
+    if up:
+        connected = bool(st.get("websocket_active"))
+        add("extension", connected,
+            f"connected, version {st.get('extension_version')}" if connected else "not connected",
+            "" if connected else "open Edge and check the popup shows Connected")
+        ext_v, dae_v = st.get("extension_version"), st.get("daemon_version")
+        try:
+            ext_major = int(str(ext_v).split(".")[0]) if ext_v else None
+            dae_major = int(str(dae_v).split(".")[0]) if dae_v else None
+        except (TypeError, ValueError):
+            ext_major = dae_major = None
+        if ext_major is None:
+            add("versions", False, "extension version unknown",
+                "open Edge and check the popup shows Connected")
+        elif dae_major is not None and ext_major < dae_major:
+            add("versions", False, f"extension {ext_v} predates daemon {dae_v}",
+                f"update from {EDGE_STORE_URL} or reload unpacked from {config.extension_dir()}")
+        else:
+            add("versions", True, f"daemon {dae_v}, extension {ext_v}", "")
+        with Edge(port=port, auto_start=False) as edge2:
+            tabs_res = edge2.tabs()
+        if tabs_res.get("success"):
+            tabs = tabs_res.get("tabs", [])
+            add("tabs", True, f"{len(tabs)} tab(s) reachable", "")
+        else:
+            add("tabs", False, f"{tabs_res.get('code')}: {tabs_res.get('error')}",
+                "open Edge and check the popup shows Connected")
+        if st.get("pairing_required"):
+            if connected:
+                add("pairing", True, "required and paired", "")
+            else:
+                data_dir = st.get("data_dir") or str(config.home())
+                add("pairing", False, "required but unpaired",
+                    f"paste the token from {Path(data_dir) / 'token'} into the extension popup")
+        else:
+            add("pairing", True, "not required", "")
+    else:
+        for name in ("extension", "versions", "tabs", "pairing"):
+            add(name, False, "skipped: daemon not running", "edge-bridge daemon start")
+
+    pid_p = config.pid_path()
+    if pid_p.exists() and not up:
+        add("pid", False, f"stale pid file at {pid_p}", "edge-bridge daemon restart")
+    else:
+        add("pid", True, "no stale pid file" if up else "no pid file", "")
+
+    from .setup import registration_status
+    try:
+        reg = registration_status()
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(reg.items()))
+    except Exception as e:
+        detail = f"check failed: {e}"
+    add("mcp", True, detail or "no clients found", "")
+
+    if opt_json:
+        print(json.dumps({"success": all(c["ok"] for c in checks), "checks": checks}))
+    else:
+        for c in checks:
+            mark = "ok  " if c["ok"] else "FAIL"
+            line = f"[{mark}] {c['name']}: {c['detail']}"
+            if not c["ok"] and c["fix"]:
+                line += f"  (fix: {c['fix']})"
+            print(line)
+    return 0 if all(c["ok"] for c in checks) else 1
+
+
+def _handle_logs(args, opt_json: bool) -> int:
+    p = config.log_path()
+    if not p.exists():
+        err = {"success": False, "code": "no_log",
+               "error": "No log file yet; the daemon has never started here. Run: edge-bridge daemon start"}
+        if opt_json:
+            print(json.dumps(err))
+        else:
+            print(f"Error ({err['code']}): {err['error']}", file=sys.stderr)
+        return 1
+    tail_n = max(0, args.tail)
+    text = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = text[-tail_n:] if tail_n else []
+    if opt_json:
+        print(json.dumps({"success": True, "path": str(p), "lines": lines}))
+    else:
+        for ln in lines:
+            print(ln)
+    if args.follow and not opt_json:
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(0, 2)
+                while True:
+                    line = fh.readline()
+                    if line:
+                        print(line, end="" if line.endswith("\n") else "\n")
+                    else:
+                        time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
+def _handle_run(args, edge: Edge, opt_session, opt_json: bool) -> int:
+    def usage(msg):
+        err = {"success": False, "code": "bad_params", "error": msg}
+        if opt_json:
+            print(json.dumps(err))
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        return 3
+
+    src = args.steps_file
+    try:
+        raw = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
+    except OSError as e:
+        return usage(f"Cannot read {src}: {e}")
+    if len(raw.encode("utf-8")) > 1024 * 1024:
+        return usage("steps file over 1 MB; batches are not bulk transport")
+    try:
+        steps = json.loads(raw)
+    except Exception as e:
+        return usage(f"Invalid JSON in {src}: {e}")
+    if not isinstance(steps, list) or not steps:
+        return usage("steps file must hold a non-empty array of {action, params}")
+    worst = 0
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict) or "action" not in step:
+            print(json.dumps({"step": i, "action": None, "success": False,
+                              "code": "bad_params", "error": "each step needs {action, params?}"}))
+            worst = 1
+            if args.stop_on_error:
+                break
+            continue
+        res = edge.send(step["action"], step.get("params") or {})
+        out = {"step": i, "action": step["action"]}
+        out.update(res if isinstance(res, dict) else {"success": False, "code": "bad_response"})
+        print(json.dumps(out))
+        if not out.get("success"):
+            if out.get("code") in ("daemon_unreachable", "missing_token"):
+                worst = 2
+                break
+            worst = 1
+            if args.stop_on_error:
+                break
+    if opt_session and edge.session_token != opt_session:
+        print(f"edge-bridge: session expired; re-minted sessionToken={edge.session_token} "
+              f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)
+    return worst
 
 
 def _handle_extension_cmd(args) -> int:
@@ -109,7 +298,8 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                 print(f"sessionToken={edge.session_token} (existing, tab {st.get('tabId')})")
             return 0
     if sub == "start":
-        res = edge._send_once("session_start", {})
+        name = getattr(args, "name", None)
+        res = edge._send_once("session_start", {"name": name} if name else {})
         if not res.get("success"):
             if opt_json:
                 print(json.dumps(res))
@@ -117,11 +307,42 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
                 print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
             return 1
         if opt_json:
-            print(json.dumps({"success": True, "sessionToken": res["sessionToken"]}))
+            print(json.dumps(res))
         else:
             print(f"sessionToken={res['sessionToken']}")
+            print(f"name: {res.get('name', '?')}")
             print(f"export EDGE_BRIDGE_SESSION={res['sessionToken']}")
         return 0
+    if sub == "list":
+        res = edge._send_once("session_list", {})
+        if opt_json:
+            print(json.dumps(res))
+        else:
+            if res.get("success"):
+                items = res.get("sessions", [])
+                if not items:
+                    print("No sessions")
+                for s in items:
+                    if s.get("tabClosed"):
+                        state = "closed"
+                    elif s.get("tabId") is None:
+                        state = "unpinned"
+                    else:
+                        state = f"tab {s.get('tabId')}"
+                    print(f"  {s.get('name')}  {state}  age {s.get('age_s')}s")
+            else:
+                print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
+        return 0 if res.get("success") else 1
+    if sub == "prune":
+        res = edge._send_once("session_prune", {})
+        if opt_json:
+            print(json.dumps(res))
+        else:
+            if res.get("success"):
+                print(f"Pruned {res.get('dropped', 0)} closed session(s)")
+            else:
+                print(f"Error ({res.get('code')}): {res.get('error')}", file=sys.stderr)
+        return 0 if res.get("success") else 1
     if not edge.session_token:
         msg = "no session: pass --session TOKEN or set EDGE_BRIDGE_SESSION"
         if opt_json:
@@ -135,7 +356,8 @@ def _handle_session_cmd(args, edge: Edge, opt_json: bool) -> int:
     else:
         if res.get("success"):
             if sub == "status":
-                print(f"Session tab: {res.get('tabId')} (closed: {res.get('tabClosed')})")
+                print(f"Session {res.get('name', '?')}: tab {res.get('tabId')} "
+                      f"(closed: {res.get('tabClosed')}, age {res.get('age_s')}s)")
             else:
                 print("Session stopped")
         else:
@@ -199,6 +421,19 @@ def main(argv=None) -> int:
     # status
     add_cmd("status", help="Get daemon and extension status")
 
+    # doctor
+    add_cmd("doctor", help="Diagnose daemon, extension, token, sessions and MCP registration")
+
+    # logs
+    p_logs = add_cmd("logs", help="Show daemon log")
+    p_logs.add_argument("--tail", type=int, default=50)
+    p_logs.add_argument("--follow", action="store_true")
+
+    # run
+    p_run = add_cmd("run", help="Execute a JSON file of {action, params} steps over one connection")
+    p_run.add_argument("steps_file")
+    p_run.add_argument("--stop-on-error", action="store_true")
+
     # daemon
     p_daemon = add_cmd("daemon", help="Manage daemon process")
     p_daemon.add_argument("daemon_action", choices=["start", "stop", "restart", "status"])
@@ -229,8 +464,9 @@ def main(argv=None) -> int:
 
     # session
     p_session = add_cmd("session", help="Manage daemon tab sessions")
-    p_session.add_argument("session_action", choices=["start", "status", "stop"])
+    p_session.add_argument("session_action", choices=["start", "status", "stop", "list", "prune"])
     p_session.add_argument("--new", action="store_true", help="session start: always mint a fresh token")
+    p_session.add_argument("--name", default=None, help="session start: pin a name to the session")
 
     # history
     p_history = add_cmd("history", help="Search or delete browsing history")
@@ -265,7 +501,9 @@ def main(argv=None) -> int:
     # snapshot
     p_snap = add_cmd("snapshot", help="Take semantic accessibility snapshot")
     p_snap.add_argument("--full", action="store_true", help="Include static text")
+    p_snap.add_argument("--compact", action="store_true", help="One terse line per ref, no values")
     p_snap.add_argument("--no-frames", action="store_true", help="Skip subframes")
+    p_snap.add_argument("--max-nodes", type=int, default=400, help="Truncate after N nodes (0 = unlimited)")
 
     # elements
     p_el = add_cmd("elements", help="List interactive elements with coordinates and refs")
@@ -444,6 +682,10 @@ def main(argv=None) -> int:
     if args.cmd == "setup":
         from .setup import setup_cli
         return setup_cli(yes=getattr(args, "yes", False))
+    if args.cmd == "doctor":
+        return _handle_doctor(port, opt_json)
+    if args.cmd == "logs":
+        return _handle_logs(args, opt_json)
 
     edge = Edge(
         tab_id=opt_tab,
@@ -460,16 +702,33 @@ def main(argv=None) -> int:
     if args.cmd == "repl":
         return _run_repl(edge)
 
+    if args.cmd == "run":
+        return _handle_run(args, edge, opt_session, opt_json)
+
     # Route status
     if args.cmd == "status":
-        res = edge.status()
+        res, pid = _status_data(edge, port)
+        sst = None
+        if res.get("success") and opt_session:
+            sst = edge._send_once("session_status", {})
+            res["session"] = sst
         if opt_json:
             print(json.dumps(res))
         else:
             if res.get("success"):
                 print(f"Edge Agent Bridge v{res.get('daemon_version') or __version__}")
-                print(f"Daemon: running on 127.0.0.1:{port} (PID {res.get('pid')})")
+                print(f"Daemon: running on 127.0.0.1:{port} (PID {pid})")
                 print(f"Extension: {res.get('extension_version', 'none')} ({'connected' if res.get('websocket_active') else 'disconnected'})")
+                if sst is not None:
+                    if sst.get("success"):
+                        if sst.get("tabClosed"):
+                            print(f"Session {sst.get('name', '?')}: tab {sst.get('tabId')} closed")
+                        elif sst.get("tabId") is None:
+                            print(f"Session {sst.get('name', '?')}: unpinned")
+                        else:
+                            print(f"Session {sst.get('name', '?')}: pinned to tab {sst.get('tabId')}")
+                    else:
+                        print("Session: expired; mint a new one with: edge-bridge session start")
             else:
                 err_code = res.get("code", "error")
                 err_msg = res.get("error", "Action failed")
@@ -540,8 +799,12 @@ def main(argv=None) -> int:
     elif action in ("back", "forward", "reload"):
         params["wait"] = "none" if args.no_wait else "load"
     elif action == "snapshot":
-        params["mode"] = "full" if args.full else "interactive"
+        if args.compact:
+            params["mode"] = "compact"
+        else:
+            params["mode"] = "full" if args.full else "interactive"
         params["frames"] = not args.no_frames
+        params["maxNodes"] = args.max_nodes
     elif action == "elements":
         if args.filter:
             params["filter"] = args.filter
@@ -589,9 +852,6 @@ def main(argv=None) -> int:
             params["value"] = args.value
         if args.label:
             params["label"] = args.label
-    elif action == "upload":
-        params["target"] = args.target
-        params["files"] = [str(Path(f).resolve()) for f in args.files]
     elif action == "scroll":
         if args.x is not None:
             params["x"] = args.x
@@ -646,7 +906,11 @@ def main(argv=None) -> int:
                 print(f"Error: Invalid JSON for batch: {e}", file=sys.stderr)
             return 3
 
-    res = edge.send(action, params)
+    if action == "upload":
+        res = edge.upload(target=args.target, files=args.files, tab_id=opt_tab,
+                          fallback=not getattr(args, "no_fallback", False))
+    else:
+        res = edge.send(action, params)
     if opt_session and edge.session_token != opt_session:
         print(f"edge-bridge: session expired; re-minted sessionToken={edge.session_token} "
               f"(export EDGE_BRIDGE_SESSION={edge.session_token})", file=sys.stderr)

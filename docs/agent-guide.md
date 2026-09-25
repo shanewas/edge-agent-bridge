@@ -26,6 +26,9 @@ sitting next to them would.
    snapshot under an `iframe` line will not resolve, use its ref.
 3. After anything that navigates or re-renders, snapshot again. Refs from an old snapshot fail
    with `stale_snapshot`; a removed element fails with `stale_ref`. Both mean: snapshot again.
+   Wide scans cost less with `mode: "compact"` (one terse line per ref, no values); switch to
+   `interactive` before filling forms. Snapshots truncate after `maxNodes` (default 400,
+   0 = unlimited) and say so: `truncated: true` with `total` nodes seen.
 4. Prefer `edge_wait` over sleeping: `{text: "Saved"}`, `{url: "/done"}`, `{load: true}`, or
    `{idle: true}` for pages that fetch after load. A timeout tells you what was still loading.
 5. When a page misbehaves, read `edge_console`: it holds recent console output, uncaught
@@ -50,7 +53,11 @@ echo the real value.
   widgets); `edge_fill` replaces the value in one step and is faster for plain inputs.
 - `<select>` needs `edge_select`, not `edge_fill`.
 - Hidden file inputs still appear in the snapshot with `hidden`; `edge_upload` on their ref or on
-  the styled button next to them works. Paths must be absolute.
+  the styled button next to them works. Paths must be absolute; from WSL, `/mnt/<drive>/...`
+  paths translate to Windows form automatically.
+- Coordinates never scroll: a ref click scrolls its target into view, an explicit `x`/`y`
+  clicks exactly where given. A target hidden under a sticky overlay fails with
+  `click_covered` instead of misclicking.
 - `edge_tab_close` needs an explicit `tabId`. The bridge will not guess which tab to close.
 - `edge_eval` runs JavaScript with full page access. Use it for reading state you cannot get
   from a snapshot, not as a substitute for clicks (page code sees `isTrusted: false` events).
@@ -74,7 +81,11 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 | `tab_busy` | another call holds the tab lock | backoff 250ms·2ⁿ+jitter ≤4×, then surface |
 | `tab_closed` | session pin points at a closed tab | `switch` or `new` to re-pin |
 | `stale_ref` | ref/frame no longer valid | ladder runs automatically; on `exhausted_fallback`, snapshot fresh |
-| `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once; if repeated, `session start` |
+| `unknown_session` | bad/expired token (incl. after daemon restart) | client re-mints once and re-pins your last tab; if repeated, `session start` |
+| `click_covered` | sticky overlay covers the target | dismiss it or scroll the target clear, then retry |
+| `file_not_found` | upload path missing | check the path; the error names both the given and translated form |
+| `bad_name` | session name outside `[A-Za-z0-9_-]{1,40}` | pick a conforming name |
+| `no_log` | daemon never started here | `edge-bridge daemon start` |
 | `focus_lost` | target never took focus | snapshot, check overlays, coords click |
 | `focus_unverifiable` | frame context unresolvable | retry, coords-only click, or abort |
 | `focus_stolen` | focus moved mid-type | resume with `remaining` |
@@ -90,6 +101,7 @@ Every failure is `{success: false, code, error}`. Codes you will meet most:
 pip install edge-agent-bridge
 edge-bridge setup          # registers the MCP server with the agent clients it finds
 edge-bridge status         # daemon, extension, and pairing state
+edge-bridge doctor         # when anything fails: checks everything, prints fixes
 ```
 
 The extension comes from the Edge Add-ons store ("Edge Agent Bridge"); developers can load
@@ -100,14 +112,16 @@ The extension comes from the Edge Add-ons store ("Edge Agent Bridge"); developer
 CLI invocations are stateless, so each agent holds a daemon-side session pinned to one tab:
 
 ```
-edge-bridge session start            # prints sessionToken=<uuid>
+edge-bridge session list             # what exists before you mint another
+edge-bridge session start --name agent-a   # prints sessionToken=<uuid>
 export EDGE_BRIDGE_SESSION=<uuid>    # or pass --session <uuid> per call
 edge-bridge switch 1459              # pin this session to your tab
 edge-bridge session status           # shows pin state
 edge-bridge session stop             # drop it server-side
+edge-bridge session prune            # drop closed-tab sessions
 ```
 
-Forgetting `--tab` is harmless inside a session: the daemon injects your pinned tab. An explicit `--tab` is a one-shot override and never changes the pin. Only `switch` and `new` re-pin. MCP clients get an implicit session per process automatically. If your tab closes, the session goes sticky `tab_closed` — every tab-scoped call fails until `switch`/`new`. There is no shared default session: two agents MUST use distinct tokens or they share one pin.
+Forgetting `--tab` is harmless inside a session: the daemon injects your pinned tab. An explicit `--tab` is a one-shot override and never changes the pin. Only `switch` and `new` re-pin. MCP clients get an implicit session per process automatically. If your tab closes, the session goes sticky `tab_closed` — every tab-scoped call fails until `switch`/`new`. A daemon restart no longer strands you: the client re-mints and re-pins your last tab (if that tab is gone, the next call resolves the active tab like a fresh session). There is no shared default session: two agents MUST use distinct tokens or they share one pin.
 
 Multi-agent etiquette: own tab each. Per-tab locks serialize writers as defense-in-depth, not as an excuse to share a tab.
 

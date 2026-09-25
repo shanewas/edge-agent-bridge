@@ -253,3 +253,60 @@ def test_tools_list_matches_the_router(mcp_proc):
         r = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": i, "method": "tools/call",
                                 "params": {"name": name, "arguments": {}}})
         assert "error" not in r, f"{name} is listed but not routed: {r.get('error')}"
+
+
+def test_snapshot_schema_has_compact_and_max_nodes(mcp_proc):
+    resp = send_rpc(mcp_proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+    snap = next(t for t in resp["result"]["tools"] if t["name"] == "edge_snapshot")
+    props = snap["inputSchema"]["properties"]
+    assert props["mode"]["enum"] == ["interactive", "full", "compact"]
+    assert props["maxNodes"]["type"] == "integer"
+
+
+def test_snapshot_forwards_mode_and_max_nodes(daemon):
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        return {"success": True, "text": "page", "refs": 0, "truncated": False, "total": 0,
+                "tab": {"id": 1, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    env = dict(
+        os.environ,
+        EDGE_BRIDGE_HOME=str(daemon.home),
+        EDGE_BRIDGE_PORT=str(daemon.port),
+        PYTHONUNBUFFERED="1",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "edge_agent_bridge.mcp"],
+        cwd=ROOT,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        r = send_rpc(proc, {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                            "params": {"name": "edge_snapshot",
+                                       "arguments": {"mode": "compact", "maxNodes": 50}}})
+        assert r["result"]["isError"] is False
+        snaps = [p for a, p in seen if a == "snapshot"]
+        assert snaps[-1].get("mode") == "compact"
+        assert snaps[-1].get("maxNodes") == 50
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+        ext.close()
+
+
+def test_mcp_session_is_named(daemon, mcp_proc):
+    time.sleep(0.3)
+    _, body = daemon.exec("session_list")
+    assert body["success"] is True
+    assert "mcp" in [s["name"] for s in body["sessions"]]

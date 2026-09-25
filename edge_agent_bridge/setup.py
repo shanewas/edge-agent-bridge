@@ -123,6 +123,38 @@ def detect_clients(env: dict | None = None, path_which: Callable[[str], str | No
     return {"cli": cli_clients, "json": json_clients}
 
 
+def registration_status(detected: dict[str, Any] | None = None) -> dict[str, str]:
+    """Read-only check of which clients have the edge server registered.
+
+    Returns per-client status: "registered" (JSON config contains the edge
+    entry), "detected" (client present, registration unknown), or "absent".
+    CLI clients can't be queried without their own tooling, so they never
+    report "registered" here.
+    """
+    found = detected or detect_clients()
+    out: dict[str, str] = {}
+    for name, path in (found.get("cli") or {}).items():
+        out[name] = "detected" if path else "absent"
+    for name, info in (found.get("json") or {}).items():
+        p = Path(info["path"])
+        entry = None
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            if isinstance(data, dict):
+                key = SERVER_KEY.get(name, "mcpServers")
+                sub = data.get(key)
+                entry = sub.get("edge") if isinstance(sub, dict) else None
+        except Exception:
+            entry = None
+        if isinstance(entry, dict) and entry.get("command") == "edge-bridge":
+            out[name] = "registered"
+        elif info.get("found"):
+            out[name] = "detected"
+        else:
+            out[name] = "absent"
+    return out
+
+
 def mcp_config_cli(client: str) -> int:
     """CLI handler for `edge-bridge mcp-config --client <name>`."""
     print(get_mcp_config(client))

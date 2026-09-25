@@ -81,3 +81,20 @@ def test_check_rejects_an_overlong_description(ext_copy):
     out = run_build("--check", "--ext", str(ext_copy))
     assert out.returncode == 1
     assert "132" in out.stderr
+
+
+def test_popup_error_box_and_actions_wired():
+    html = (EXT / "popup.html").read_text(encoding="utf-8")
+    assert "edge-bridge status" not in html
+    assert "microsoftedge.microsoft.com/addons/detail/agent-browser-bridge" in html
+    for el in ("errSection", "errBox", "reconnectBtn", "diagBtn", "actionMsg"):
+        assert f'id="{el}"' in html
+    js = (EXT / "popup.js").read_text(encoding="utf-8")
+    assert "lastError" in js and "FIXES" in js
+    diag = js.split('getElementById("diagBtn")')[1].split("updateUI();")[0]
+    for key in ("daemon_version", "extension_version", "extension_id",
+                "websocket_active", "pairing_required", "data_dir"):
+        assert key in diag
+    assert '"token"' not in diag and '"url"' not in diag and "tabInfo" not in diag
+    bg = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "lastError" in bg
