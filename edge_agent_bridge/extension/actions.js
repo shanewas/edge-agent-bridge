@@ -125,7 +125,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
     }
     await new Promise(r => setTimeout(r, 100));
   }
-  return { found: false, code: (last && last.code) || "target_not_found", error: `Target not found within ${timeoutMs}ms: "${target}"` };
+  return { found: false, code: (last && last.code) || "target_not_found", error: (last && last.error) || `Target not found within ${timeoutMs}ms: "${target}"` };
 }
 
 function hasCoords(p) {
@@ -139,6 +139,15 @@ async function locate(tabId, p, verb) {
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
   const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
+  if (frameOfRef(target) !== undefined && r.rendered !== false) {
+    // pageResolve ran inside the subframe, blind to main-frame overlays. The top
+    // element at main-frame coords must be an iframe; anything else eats the click.
+    // Non-rendered targets (hidden inputs) skip this like the in-frame check.
+    const cover = await execInTab(tabId, page.pageCoverCheck, [r.x, r.y]);
+    if (cover && cover.covered) {
+      return { ok: false, result: fail("click_covered", `Target "${target}" is covered by <${cover.covering}> in the main frame`), target };
+    }
+  }
   return { ok: true, x: r.x, y: r.y, info: r };
 }
 
@@ -766,9 +775,10 @@ export async function execute(cmd) {
 
       case "snapshot": {
         await attach(tabId);
-        const snap = await snapshotTab(tabId, p.mode || "interactive", p.frames !== false);
+        const snap = await snapshotTab(tabId, p.mode || "interactive", p.frames !== false, p.maxNodes);
         if (!snap.success) return snap;
-        return { success: true, text: snap.text, refs: snap.refs, url: snap.url, title: snap.title };
+        return { success: true, text: snap.text, refs: snap.refs, url: snap.url, title: snap.title,
+                 truncated: (snap.truncated || 0) > 0, total: snap.total || 0 };
       }
 
       case "batch": {

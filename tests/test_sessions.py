@@ -96,7 +96,8 @@ def test_tab_closed_sticky_until_switch(daemon):
     _, sw = daemon.exec("tab_switch", {"tabId": 7}, session_token=token)
     assert sw["success"] is True
     _, st2 = daemon.exec("session_status", session_token=token)
-    assert st2 == {"success": True, "tabId": 7, "tabClosed": False}
+    assert st2["success"] is True and st2["tabId"] == 7 and st2["tabClosed"] is False
+    assert st2["name"].startswith("s-") and st2["age_s"] >= 0
     code, body = daemon.exec("click", {"target": "b"}, session_token=token)
     assert body["success"] is True
     ext.close()
@@ -144,6 +145,66 @@ def test_batch_stops_on_error_with_shape(daemon):
     assert code == 200 and body["success"] is False and body["stoppedAt"] == "click"
     assert len(body["results"]) == 2
     ext.close()
+
+
+def test_named_session_start_status(daemon):
+    import re
+    code, start = daemon.exec("session_start", {"name": "agent-a"})
+    assert code == 200 and start["success"] is True and start["name"] == "agent-a"
+    _, st = daemon.exec("session_status", session_token=start["sessionToken"])
+    assert st["name"] == "agent-a" and st["age_s"] >= 0
+    _, anon = daemon.exec("session_start")
+    assert re.fullmatch(r"s-[0-9a-f]{8}", anon["name"])
+
+
+def test_bad_session_name_rejected(daemon):
+    for bad in ["has space", "bang!", "", "x" * 41, "semi;colon", "uni–dash", 123]:
+        code, body = daemon.exec("session_start", {"name": bad})
+        assert code == 200 and body["code"] == "bad_name", bad
+
+
+def test_session_list_hides_tokens(daemon):
+    import json
+    _, a = daemon.exec("session_start", {"name": "first"})
+    _, b = daemon.exec("session_start", {"name": "second"})
+    code, body = daemon.exec("session_list")
+    assert code == 200 and body["success"] is True
+    assert [s["name"] for s in body["sessions"]] == ["first", "second"]
+    assert "sessionToken" not in json.dumps(body)
+    assert a["sessionToken"] not in json.dumps(body) and b["sessionToken"] not in json.dumps(body)
+
+
+def test_session_prune_drops_closed_only(daemon):
+    def handler(action, params):
+        if action in ("tab_switch", "switch_tab"):
+            tid = params.get("tabId", 7)
+            return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+        if params.get("tabId") == 5:
+            return {"success": False, "code": "tab_not_found", "error": "gone"}
+        tid = params.get("tabId", 7)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.3)
+    _, doomed = daemon.exec("session_start", {"name": "doomed"})
+    _, kept = daemon.exec("session_start", {"name": "kept"})
+    daemon.exec("tab_switch", {"tabId": 5}, session_token=doomed["sessionToken"])
+    daemon.exec("tab_switch", {"tabId": 7}, session_token=kept["sessionToken"])
+    daemon.exec("click", {"target": "b"}, session_token=doomed["sessionToken"])
+    _, st = daemon.exec("session_status", session_token=doomed["sessionToken"])
+    assert st["tabClosed"] is True
+    code, body = daemon.exec("session_prune")
+    assert code == 200 and body == {"success": True, "dropped": 1}
+    _, listed = daemon.exec("session_list")
+    assert [s["name"] for s in listed["sessions"]] == ["kept"]
+    _, gone = daemon.exec("session_status", session_token=doomed["sessionToken"])
+    assert gone["code"] == "unknown_session"
+    ext.close()
+
+
+def test_status_reports_data_dir(daemon):
+    st = daemon.status()
+    assert st["data_dir"] == str(daemon.home)
 
 
 def test_deadline_ms_forwarded_for_tab_scoped_only(daemon, fake_ext):

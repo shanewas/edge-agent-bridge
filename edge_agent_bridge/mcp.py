@@ -101,8 +101,9 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "mode": {"type": "string", "enum": ["interactive", "full"], "default": "interactive"},
+                "mode": {"type": "string", "enum": ["interactive", "full", "compact"], "default": "interactive"},
                 "frames": {"type": "boolean", "default": True},
+                "maxNodes": {"type": "integer", "default": 400, "description": "Truncate after N nodes (0 = unlimited)."},
                 **COMMON_TOOL_PROPERTIES,
             },
         },
@@ -505,6 +506,7 @@ def handle(msg: dict, edge: Edge) -> dict | None:
                 mode=args.get("mode", "interactive"),
                 frames=args.get("frames", True),
                 tab_id=args.get("tabId"),
+                max_nodes=args.get("maxNodes", 400),
             )
         elif tool_name == "edge_click":
             res = edge.click(
@@ -716,7 +718,7 @@ def serve(stdin=None, stdout=None) -> None:
     out_stream = stdout or sys.stdout.buffer
 
     edge = Edge(pin=True, auto_start=True)
-    mint = edge.send("session_start")
+    mint = edge.send("session_start", {"name": "mcp"})
     if mint.get("success") and mint.get("sessionToken"):
         edge.session_token = mint["sessionToken"]
     else:

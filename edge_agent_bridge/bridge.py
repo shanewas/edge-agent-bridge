@@ -30,7 +30,8 @@ MAX_FRAME_PAYLOAD = 16 * 1024 * 1024  # 16 MB
 
 LOCK_EXEMPT_ACTIONS = frozenset({
     "ping", "status", "tabs", "daemon", "session_start",
-    "session_status", "session_stop", "mcp-config", "extension",
+    "session_status", "session_stop", "session_list", "session_prune",
+    "mcp-config", "extension",
     "history_search", "history_delete",
     "group_list", "group_move", "group_ungroup",
 })
@@ -184,9 +185,12 @@ class BridgeState:
                     self._grace_timer.cancel()
                     self._grace_timer = None
 
-    def session_create_locked(self) -> str:
+    def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())
-        self.sessions[token] = {"tabId": None, "tabClosed": False, "warned": set()}
+        if not name:
+            name = "s-" + token[:8]
+        self.sessions[token] = {"tabId": None, "tabClosed": False, "warned": set(),
+                                "name": name, "created": time.time()}
         return token
 
     def tab_lock_locked(self, tab_id: int) -> threading.Lock:
@@ -223,6 +227,12 @@ def _heartbeat_worker(state: BridgeState, stop_event: threading.Event):
         if to_close:
             to_close.close()
             state.on_ws_closed(to_close)
+
+
+def _valid_session_name(name) -> bool:
+    if not isinstance(name, str) or not 1 <= len(name) <= 40:
+        return False
+    return all("a" <= c <= "z" or "A" <= c <= "Z" or "0" <= c <= "9" or c in "_-" for c in name)
 
 
 def _strip_session_token(obj) -> None:
@@ -334,6 +344,7 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 "pending": pending_count,
                 "sessions": session_count,
                 "pairing_required": state.pairing_required,
+                "data_dir": str(config.home()),
             })
             return
 
@@ -560,9 +571,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             session_token = req.get("sessionToken")
 
             if action == "session_start":
+                name = params.get("name")
+                if name is not None and not _valid_session_name(name):
+                    self._respond(200, {"success": False, "code": "bad_name",
+                                        "error": "Invalid session name: use 1-40 chars of A-Z a-z 0-9 _ -."})
+                    return
                 with state.lock:
-                    token = state.session_create_locked()
-                self._respond(200, {"success": True, "sessionToken": token})
+                    token = state.session_create_locked(name)
+                    sess_name = state.sessions[token]["name"]
+                self._respond(200, {"success": True, "sessionToken": token, "name": sess_name})
                 return
 
             if action in ("session_status", "session_stop"):
@@ -576,8 +593,27 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                         del state.sessions[session_token]
                         self._respond(200, {"success": True, "stopped": True})
                         return
-                    self._respond(200, {"success": True, "tabId": sess["tabId"], "tabClosed": sess["tabClosed"]})
+                    now = time.time()
+                    self._respond(200, {"success": True, "name": sess.get("name", "s-?"),
+                                        "tabId": sess["tabId"], "tabClosed": sess["tabClosed"],
+                                        "age_s": int(now - sess.get("created", now))})
                     return
+
+            if action in ("session_list", "session_prune"):
+                now = time.time()
+                with state.lock:
+                    if action == "session_prune":
+                        closed = [t for t, s in state.sessions.items() if s.get("tabClosed")]
+                        for t in closed:
+                            del state.sessions[t]
+                        self._respond(200, {"success": True, "dropped": len(closed)})
+                        return
+                    items = [{"name": s.get("name", "s-?"), "tabId": s.get("tabId"),
+                              "tabClosed": s.get("tabClosed", False),
+                              "age_s": int(now - s.get("created", now))}
+                             for s in state.sessions.values()]
+                self._respond(200, {"success": True, "sessions": items})
+                return
 
             session = None
             if session_token is not None:

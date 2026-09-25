@@ -178,3 +178,168 @@ def test_explicit_tab_id_repins(daemon, monkeypatch):
     assert edge.tab_id == 11
     edge.close()
     ext.close()
+
+
+def test_snapshot_sends_max_nodes(daemon, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append(dict(params))
+        return {"success": True, "text": "page", "refs": 0,
+                "tab": {"id": 3, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    edge.snapshot()
+    assert seen[-1].get("maxNodes") == 400
+    edge.snapshot(max_nodes=50)
+    assert seen[-1].get("maxNodes") == 50
+    edge.snapshot(max_nodes=0)
+    assert seen[-1].get("maxNodes") == 0
+    edge.close()
+    ext.close()
+
+
+def test_wsl_to_windows_table():
+    from edge_agent_bridge.client import _wsl_to_windows
+    assert _wsl_to_windows("/mnt/c/tmp/spec.pdf") == "C:\\tmp\\spec.pdf"
+    assert _wsl_to_windows("/mnt/D/a/b") == "D:\\a\\b"
+    assert _wsl_to_windows("C:\\tmp\\spec.pdf") == "C:\\tmp\\spec.pdf"
+    assert _wsl_to_windows("/tmp/spec.pdf") == "/tmp/spec.pdf"
+    assert _wsl_to_windows("/mnt/c") == "/mnt/c"
+    assert _wsl_to_windows("/mnt/1/x") == "/mnt/1/x"
+    assert _wsl_to_windows("") == ""
+
+
+def test_upload_missing_file_errors_locally(tmp_path):
+    from edge_agent_bridge.client import _wsl_to_windows
+    edge = Edge(port=1, auto_start=False)
+    missing = str(tmp_path / "nope.pdf")
+    r = edge.upload(ref="e1", files=[missing])
+    assert r["success"] is False and r["code"] == "file_not_found"
+    assert missing in r["error"]
+    wsl = "/mnt/c/nope/nonexistent.pdf"
+    r2 = edge.upload(ref="e1", files=[wsl])
+    assert r2["code"] == "file_not_found"
+    assert wsl in r2["error"]
+    assert _wsl_to_windows(str(Path(wsl).resolve())) in r2["error"]
+    edge.close()
+
+
+def test_upload_forwards_existing_file(daemon, monkeypatch, tmp_path):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    f = tmp_path / "up.pdf"
+    f.write_bytes(b"%PDF")
+    seen = []
+
+    def handler(action, params):
+        seen.append(dict(params))
+        return {"success": True, "tab": {"id": 3, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    r = edge.upload(ref="e3", files=[str(f)])
+    assert r["success"] is True
+    assert seen[-1]["files"] == [str(Path(str(f)).resolve())]
+    edge.close()
+    ext.close()
+
+
+def _restart_with_ext(daemon, handler):
+    daemon.restart()
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    deadline = time.time() + 5
+    while time.time() < deadline and not daemon.status().get("websocket_active"):
+        time.sleep(0.05)
+    return ext
+
+
+def test_session_remint_repins_remembered_tab(daemon, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action in ("tab_switch", "switch_tab"):
+            tid = params.get("tabId", 7)
+            return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+        tid = params.get("tabId")
+        return {"success": True, "tab": {"id": tid or 9, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    mint = edge.send("session_start", {})
+    assert mint["success"] is True
+    edge.session_token = mint["sessionToken"]
+    edge.send("tab_switch", {"tabId": 5})
+    assert edge._last_tab_id == 5
+    old_token = edge.session_token
+
+    ext2 = _restart_with_ext(daemon, handler)
+    r = edge.send("click", {"target": "b"})
+    assert r["success"] is True
+    assert edge.session_token != old_token
+    switches = [p for a, p in seen if a in ("tab_switch", "switch_tab")]
+    assert switches[-1].get("tabId") == 5
+    clicks = [p for a, p in seen if a == "click"]
+    assert clicks[-1].get("tabId") == 5
+    edge.close()
+    ext.close()
+    ext2.close()
+
+
+def test_one_shot_override_keeps_remembered_tab(daemon, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+
+    def handler(action, params):
+        tid = params.get("tabId", 7)
+        return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    mint = edge.send("session_start", {})
+    edge.session_token = mint["sessionToken"]
+    edge.send("tab_switch", {"tabId": 5})
+    edge.send("click", {"target": "b", "tabId": 9})
+    assert edge._last_tab_id == 5
+    edge.close()
+    ext.close()
+
+
+def test_remint_falls_back_to_active_tab_when_remembered_tab_gone(daemon, monkeypatch):
+    monkeypatch.setenv("EDGE_BRIDGE_HOME", str(daemon.home))
+    closed = []
+    seen = []
+
+    def handler(action, params):
+        seen.append((action, dict(params)))
+        if action in ("tab_switch", "switch_tab"):
+            tid = params.get("tabId", 7)
+            if tid == 5 and closed:
+                return {"success": False, "code": "tab_not_found", "error": "gone"}
+            return {"success": True, "tab": {"id": tid, "title": "t", "url": "http://t"}}
+        tid = params.get("tabId")
+        return {"success": True, "tab": {"id": tid or 9, "title": "t", "url": "http://t"}}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    time.sleep(0.2)
+    edge = Edge(port=daemon.port, auto_start=False)
+    mint = edge.send("session_start", {})
+    edge.session_token = mint["sessionToken"]
+    edge.send("tab_switch", {"tabId": 5})
+
+    closed.append(True)
+    ext2 = _restart_with_ext(daemon, handler)
+    r = edge.send("click", {"target": "b"})
+    assert r["success"] is True
+    clicks = [p for a, p in seen if a == "click"]
+    assert "tabId" not in clicks[-1]
+    assert edge._last_tab_id == 9
+    edge.close()
+    ext.close()
+    ext2.close()

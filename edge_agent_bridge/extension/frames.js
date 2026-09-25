@@ -46,6 +46,7 @@ export async function snapshotTab(tabId, mode, withFrames, maxNodes = 400, execI
 
   const samePath = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
   const placed = new Set();
+  const padUnit = mode === "compact" ? "" : "  ";
   function compose(snap) {
     const lines = snap.lines.slice();
     if (!withFrames) return lines;
@@ -59,7 +60,7 @@ export async function snapshotTab(tabId, mode, withFrames, maxNodes = 400, execI
       }
       placed.add(child.frameId);
       lines[m.line] += ` [f${child.frameId}]`;
-      const sub = compose(child).map(l => "  ".repeat(m.depth + 1) + l);
+      const sub = compose(child).map(l => padUnit.repeat(m.depth + 1) + l);
       lines.splice(m.line + 1, 0, ...sub);
     }
     return lines;
@@ -68,9 +69,11 @@ export async function snapshotTab(tabId, mode, withFrames, maxNodes = 400, execI
   for (const s of subs) {
     if (placed.has(s.frameId)) continue;
     lines.push(`- iframe "${s.title || s.url}" [f${s.frameId}] (position unknown)`);
-    lines.push(...s.lines.map(l => "  " + l));
+    lines.push(...s.lines.map(l => padUnit + l));
   }
   const nodes = main.nodes.concat(...subs.map(s => s.nodes));
   const refs = main.refs + subs.reduce((n, s) => n + s.refs, 0);
-  return { success: true, text: [`page "${main.title}" url=${main.url}`, ...lines].join("\n"), refs, nodes, url: main.url, title: main.title };
+  const truncated = (main.truncated || 0) + subs.reduce((n, s) => n + (s.truncated || 0), 0);
+  const total = (main.total || 0) + subs.reduce((n, s) => n + (s.total || 0), 0);
+  return { success: true, text: [`page "${main.title}" url=${main.url}`, ...lines].join("\n"), refs, nodes, url: main.url, title: main.title, truncated, total };
 }

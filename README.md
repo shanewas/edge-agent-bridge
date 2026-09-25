@@ -135,13 +135,14 @@ raw result dict and never raise on a failed action: check `success`, read `code`
 
 ```bash
 edge-bridge snapshot                      # tree with refs; --full adds static text
+edge-bridge snapshot --compact --max-nodes 50  # terse refs-only lines; 0 = unlimited
 edge-bridge elements                      # interactive nodes with coordinates
 edge-bridge click e5                      # ref, CSS selector or visible text
 edge-bridge fill e1 "AI agents"
 edge-bridge type "slow typing" --delay 30 # per-key events, for autocomplete widgets
 edge-bridge key Enter
 edge-bridge select e6 --label 日本語
-edge-bridge upload e3 C:/tmp/spec.pdf
+edge-bridge upload e3 C:/tmp/spec.pdf    # WSL /mnt/<drive>/... paths translate automatically
 edge-bridge wait --text Opened
 edge-bridge wait --idle                   # no in-flight requests; ignores WebSockets
 edge-bridge screenshot out.jpg --of e4
@@ -155,11 +156,15 @@ edge-bridge group list                     # tab groups; --window-id filters
 edge-bridge group move 1459 1460 --title Agent --color blue   # omit --group-id for a new group
 edge-bridge group ungroup 1459
 edge-bridge batch '[{"action":"click","target":"e5"},{"action":"sleep","ms":50},{"action":"fill","target":"e1","text":"spec"}]'
-edge-bridge session start               # prints sessionToken=<uuid>; --new always mints
+edge-bridge run steps.json --stop-on-error  # batch from a file; one JSON line per step
+edge-bridge session start --name agent-a  # prints sessionToken=<uuid>; --new always mints
+edge-bridge session list                  # named pins; prune drops closed-tab sessions
 edge-bridge session status --session <uuid>
 edge-bridge session stop --session <uuid>
 edge-bridge click e5 --session <uuid>   # session pin; --tab is a one-shot override
 edge-bridge click e5 --no-fallback      # disable the ref→text→scan→coords ladder
+edge-bridge doctor                      # diagnose daemon, extension, token, pairing
+edge-bridge logs --tail 50              # daemon log (--follow streams)
 ```
 
 `--json` prints the raw result as a single line and sets the exit code: 0 on success, 1 when the
@@ -167,7 +172,7 @@ action failed, 2 when the daemon is unreachable, 3 on a usage error. `--no-highl
 ring drawn around the element about to be acted on.
 
 Each CLI call pays roughly 600 ms of Python startup. For anything repetitive use MCP, the Python
-API, or the REPL, which reuses one connection:
+API, `run` (one process for a whole step file), or the REPL, which reuses one connection:
 
 ```bash
 edge-bridge repl

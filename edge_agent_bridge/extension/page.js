@@ -322,7 +322,8 @@ export async function pageSnapshot(opts) {
   const L = window.__eabLib;
   if (!L) return { success: false, code: "lib_missing" };
   const o = opts || {};
-  const mode = o.mode === "full" ? "full" : "interactive";
+  const mode = o.mode === "full" ? "full" : (o.mode === "compact" ? "compact" : "interactive");
+  const compact = mode === "compact";
   const prefix = o.frameLabel || "";
   const MAX_NODES = o.maxNodes === 0 ? Infinity : (o.maxNodes || 400);
   const refs = new Map();
@@ -386,7 +387,11 @@ export async function pageSnapshot(opts) {
     if (counter >= MAX_NODES) { truncated += 1; return; }
     const ref = newRef(el);
     const name = L.nameOf(el, role);
-    lines.push(`${"  ".repeat(depth)}- ${role} "${quote(name)}" [${ref}]${attrsFor(el, role)}`);
+    if (compact) {
+      lines.push(`${ref} ${role} "${quote(name)}"`);
+    } else {
+      lines.push(`${"  ".repeat(depth)}- ${role} "${quote(name)}" [${ref}]${attrsFor(el, role)}`);
+    }
     const r = L.rectOf(el);
     const c = L.center(r);
     nodes.push({ ref, role, name, x: c.x + info.x, y: c.y + info.y, w: Math.round(r.width), h: Math.round(r.height), id: el.id || "" });
@@ -408,6 +413,7 @@ export async function pageSnapshot(opts) {
       if (!isFile && !L.isVisible(child)) continue;
 
       if (role === "heading") {
+        if (compact) continue;
         const level = Number((child.tagName.match(/^H([1-6])$/) || [])[1] || child.getAttribute("aria-level") || 2);
         lines.push(`${"  ".repeat(depth)}- heading "${quote(L.nameOf(child, role))}" level=${level}`);
         continue;
@@ -432,6 +438,7 @@ export async function pageSnapshot(opts) {
         continue;
       }
       if (L.CONTAINER_TAGS.has(tag) || role === "dialog" || role === "navigation" || role === "main" || role === "group" || role === "table") {
+        if (compact) { walk(child, depth); continue; }
         const before = lines.length;
         lines.push("");
         walk(child, depth + 1);
@@ -456,9 +463,11 @@ export async function pageSnapshot(opts) {
   walk(document.body || document.documentElement, 0);
   if (truncated) lines.push(`… ${truncated} more nodes, use mode=full or filter`);
   window.__eab = { gen: o.gen || 0, refs };
+  // total counts interactive nodes seen: refs kept plus refs dropped by MAX_NODES.
   return {
     success: true, lines, refs: counter, nodes, iframes, title: document.title, url: location.href,
-    path: info.path, placed: info.ok, offset: { x: info.x, y: info.y }
+    path: info.path, placed: info.ok, offset: { x: info.x, y: info.y },
+    truncated, total: counter + truncated
   };
 }
 
@@ -539,12 +548,60 @@ export async function pageResolve(query, opts) {
   try {
     el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
   } catch (e) {}
-  const r = L.rectOf(el);
-  const c = L.center(r);
+  let r = L.rectOf(el);
+  let c = L.center(r);
+  // Targets with no clickable box (display:none upload inputs exist for programmatic
+  // use) skip the covering check: hit-testing them is meaningless.
+  let rendered = r.width > 0 && r.height > 0;
+  if (rendered) {
+    try {
+      const cs = window.getComputedStyle(el);
+      rendered = cs.display !== "none" && cs.visibility !== "hidden";
+    } catch (e) { rendered = false; }
+  }
+  // Covering check: the click point must hit the target, not a sticky overlay.
+  // A top element counts as a hit when it is the target, sits inside it, or is a
+  // shadow host above it (browser hit-testing pierces open shadow trees). A plain
+  // light-DOM ancestor means the target has pointer-events:none and would miss.
+  const hitReaches = (top) => {
+    if (!top) return false;
+    if (top === el || el.contains(top)) return true;
+    let node = el;
+    for (;;) {
+      const root = node.getRootNode ? node.getRootNode() : null;
+      if (!root || !root.host) return false;
+      if (root.host === top) return true;
+      node = root.host;
+    }
+  };
+  if (rendered) {
+    let coveredBy = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const top = document.elementFromPoint(c.x, c.y);
+      if (hitReaches(top)) { coveredBy = ""; break; }
+      coveredBy = top && top.tagName ? top.tagName.toLowerCase() : "unknown";
+      if (attempt === 0 && top) {
+        const cr = top.getBoundingClientRect();
+        const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+        if (vh - cr.bottom >= cr.top) {
+          window.scrollBy(0, -(cr.bottom - c.y + 8));
+        } else {
+          window.scrollBy(0, c.y - cr.top + 8);
+        }
+        r = L.rectOf(el);
+        c = L.center(r);
+      }
+    }
+    if (coveredBy) {
+      return { found: false, code: "click_covered",
+               error: `Target "${q}" is covered by <${coveredBy}>; scroll it into view or dismiss the overlay` };
+    }
+  }
   if (o.highlight !== false) L.highlight(r, ref);
   const role = L.roleOf(el);
   return {
     found: true,
+    rendered,
     x: c.x + info.x,
     y: c.y + info.y,
     width: Math.round(r.width),
@@ -555,6 +612,20 @@ export async function pageResolve(query, opts) {
     role,
     text: L.nameOf(el, role).slice(0, 60)
   };
+}
+
+// Main-frame hit-test for a subframe target: at main-frame coords the top element must
+// be an iframe (possibly behind one shadow host), not a main-frame overlay.
+export function pageCoverCheck(cx, cy) {
+  let top = null;
+  try { top = document.elementFromPoint(cx, cy); } catch (e) {}
+  if (top && top.shadowRoot) {
+    try { top = top.shadowRoot.elementFromPoint(cx, cy) || top; } catch (e) {}
+  }
+  if (!top) return { covered: true, covering: "unknown" };
+  const tag = top.tagName ? top.tagName.toLowerCase() : "unknown";
+  if (tag === "iframe") return { covered: false };
+  return { covered: true, covering: tag };
 }
 
 // Pick an <option> on the <select> found by ref or at (cx, cy). Matches value first, then

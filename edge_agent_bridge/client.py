@@ -21,6 +21,20 @@ LADDER_ACTIONS = frozenset({
 })
 LADDER_RETRY_CODES = frozenset({"stale_ref", "stale_snapshot", "target_not_found"})
 WRITE_ACTIONS = frozenset({"fill", "type"})
+REPIN_ACTIONS = frozenset({"tab_switch", "switch_tab", "tab_new"})
+
+
+def _wsl_to_windows(path_str: str) -> str:
+    """Rewrite a WSL /mnt/<drive>/... path to Windows form (C:\\...).
+
+    Shape-only: a native Windows path never matches, so this runs on every
+    platform and leaves anything else untouched.
+    """
+    if (len(path_str) > 7 and path_str.startswith("/mnt/")
+            and (("a" <= path_str[5] <= "z") or ("A" <= path_str[5] <= "Z"))
+            and path_str[6] == "/"):
+        return path_str[5].upper() + ":\\" + path_str[7:].replace("/", "\\")
+    return path_str
 
 
 def score_element_match(entries, text):
@@ -111,6 +125,7 @@ class Edge:
         self._ref_texts = {}
         self._degraded_warned = False
         self._reminting = False
+        self._last_tab_id = None
         self._conn: http.client.HTTPConnection | None = None
 
     def _get_connection(self) -> http.client.HTTPConnection:
@@ -199,9 +214,20 @@ class Edge:
                 self.tab_id = None
             tab_info = data.get("tab")
             if isinstance(tab_info, dict) and tab_info.get("id") is not None:
-                repin = action in ("tab_switch", "switch_tab", "tab_new") or "tabId" in (params or {})
+                repin = action in REPIN_ACTIONS or "tabId" in (params or {})
                 if repin or self.tab_id is None:
                     self.tab_id = tab_info["id"]
+
+        # Remember the tab for session re-mint re-pin. One-shot overrides (an
+        # explicit tabId on a non-repin action) don't count: the server pin
+        # stays where it was, so the remembered tab must too.
+        if (params or {}).get("tabId") is None or action in REPIN_ACTIONS:
+            tab_seen = data.get("tab")
+            if isinstance(tab_seen, dict) and tab_seen.get("id") is not None:
+                try:
+                    self._last_tab_id = int(tab_seen["id"])
+                except (TypeError, ValueError):
+                    pass
 
         return data
 
@@ -215,6 +241,12 @@ class Edge:
                 mint = self._send_once("session_start", {})
                 if mint.get("success") and mint.get("sessionToken"):
                     self.session_token = mint["sessionToken"]
+                    if self._last_tab_id is not None:
+                        repin = self._send_once("tab_switch", {"tabId": self._last_tab_id}, timeout)
+                        if not repin.get("success"):
+                            # Tab is gone; stay unpinned so the retry resolves
+                            # the active tab like a fresh session.
+                            self._last_tab_id = None
                     data = self._send_once(action, p, timeout)
             finally:
                 self._reminting = False
@@ -413,8 +445,8 @@ class Edge:
             p["tabId"] = tab_id
         return self.send("reload", p)
 
-    def snapshot(self, mode: str = "interactive", frames: bool = True, tab_id=None) -> dict:
-        p = {"mode": mode, "frames": frames}
+    def snapshot(self, mode: str = "interactive", frames: bool = True, tab_id=None, max_nodes: int = 400) -> dict:
+        p = {"mode": mode, "frames": frames, "maxNodes": max_nodes}
         if tab_id is not None:
             p["tabId"] = tab_id
         return self.send("snapshot", p)
@@ -542,12 +574,18 @@ class Edge:
         return self.send("select", p)
 
     def upload(self, target=None, ref=None, files=None, tab_id=None, fallback=True) -> dict:
-        file_list = []
+        raw = []
         if files:
-            if isinstance(files, (list, tuple)):
-                file_list = [str(Path(f).resolve()) for f in files]
-            else:
-                file_list = [str(Path(files).resolve())]
+            raw = list(files) if isinstance(files, (list, tuple)) else [files]
+        file_list = []
+        for f in raw:
+            resolved = str(Path(f).resolve())
+            if not Path(resolved).exists():
+                translated = _wsl_to_windows(resolved)
+                return {"success": False, "code": "file_not_found",
+                        "error": f"File not found: {f} (as {translated}). "
+                                 "Pass an existing file, or a Windows-style path when driving Windows Edge."}
+            file_list.append(_wsl_to_windows(resolved))
         p = {"files": file_list}
         if ref is not None:
             p["ref"] = ref

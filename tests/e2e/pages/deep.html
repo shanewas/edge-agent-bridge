@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Deep fixture</title>
+</head>
+<body>
+  <h1>Deep fixture</h1>
+  <div style="height: 3000px;">scroll down</div>
+  <button type="button" id="deep-btn">Deep target</button>
+  <script>
+    document.getElementById("deep-btn").addEventListener("click", function () {
+      this.setAttribute("data-clicked", "true");
+    });
+  </script>
+</body>
+</html>

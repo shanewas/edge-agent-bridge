@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.3.0
+
+- `edge-bridge doctor` diagnoses daemon, token, extension, versions, tabs, pairing,
+  stale pid, and MCP registration in one command (exit 0/1, `--json` for agents).
+  `edge-bridge logs [--tail N] [--follow]` tails the daemon log, including a `no_log`
+  error when the daemon never started. `status` and `daemon status` share one
+  implementation; `status` no longer prints `PID None` and shows the session pin.
+- Sessions: `session start --name`, `session list`, `session prune`; `session_status`
+  reports `name` and `age_s`; list output never contains tokens. The client remembers
+  the last tab and re-pins it after a daemon restart (`unknown_session` re-mint);
+  when the tab is gone the session resolves the active tab like a fresh one.
+- Snapshot budgets: `maxNodes` (CLI `--max-nodes`, default 400, 0 = unlimited),
+  `truncated`/`total` in every snapshot result, and `mode: "compact"` (CLI
+  `--compact`, MCP `mode`) with one terse line per ref and no values.
+- Clicks that land: resolve hit-tests the click point, nudges the scroll toward free
+  space once, and returns `click_covered` instead of dispatching into a sticky
+  overlay; subframe targets get a main-frame cover check. Explicit `--x/--y` never
+  scrolls, by design.
+- Popup v2: last-error box with a fix hint, Reconnect button, Copy-diagnostics
+  button (versions, extension id, connection state; no token or URLs), store link in
+  the outdated banner, and a pairing placeholder that names the token file.
+- `edge-bridge run STEPS.json [--stop-on-error]` executes `{action, params}` steps
+  over one connection with one JSON line per step (`-` reads stdin). CLI `upload`
+  checks files exist first (`file_not_found` naming both forms) and translates WSL
+  `/mnt/<drive>/...` paths to Windows form for Windows Edge.
+
 ## 2.2.0
 
 - Browsing history: `edge-bridge history search "query"` searches titles/URLs with `--max-results`,
