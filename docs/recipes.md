@@ -1,0 +1,52 @@
+# Recipes
+
+Short playbooks for flows that cost real sessions. All assume a pinned
+`--tab` or `--session` so a tab the user switches to never receives commands.
+
+## Shadow-DOM upload (Salesforce Lightning, custom elements)
+
+`upload` pierces open shadow roots and temp-reveals hidden inputs itself:
+
+```bash
+edge-bridge upload "Choose File" C:\path\cv.docx --tab 1361124478
+```
+
+Rules that still hold: target the label or button near the input; JS
+`.click()` never opens a native dialog, only a trusted bridge click does.
+If `upload` reports `no_file_input`, the input lives in a closed shadow
+root or is created on click — click the button first, then retry.
+
+## Long JS without shell quoting
+
+```bash
+edge-bridge eval --file probe.js --tab 1361124478
+cat probe.js | edge-bridge eval --file - --tab 1361124478
+```
+
+`--file` also avoids the 8 KiB CLI arg ceilings on some shells.
+
+## OS file dialog via doppelhand (last resort)
+
+When no DOM input exists at all (custom dropzone with no `<input type=file>`):
+
+```python
+from edge_agent_bridge import Edge, Doppelhand
+edge = Edge(tab_id=1361124478)
+edge.click("Upload resume")          # trusted click opens the OS dialog
+dh = Doppelhand(token="...")         # or DOPPELHAND_TOKEN env
+dh.type_file_and_confirm("cv.docx")  # types name, presses Return
+```
+
+Doppelhand mutating calls require POST (the client does this); coords are in
+view space from `/screen`. Verify with `shot()` after any coord click.
+
+## Tight captcha chains
+
+Captcha tokens expire in ~2 minutes. Chain solve→submit in one `run` call
+instead of separate CLI invocations:
+
+```bash
+edge-bridge run steps.json --tab 1361124478
+```
+
+where `steps.json` is `[{action, params}, ...]` (use `-` for stdin).

@@ -661,12 +661,31 @@ export function pageSelect(ref, cx, cy, value, label) {
 }
 
 // Find the file input for an upload target and mark it so the worker can address it over CDP.
+// Pierces open shadow roots (Salesforce Lightning, custom elements); temp-reveals
+// hidden inputs since CDP setFileInputFiles rejects display:none ("Not allowed").
 export function pageMarkUpload(ref, cx, cy) {
   let el = null;
   if (ref && window.__eab && window.__eab.refs) el = window.__eab.refs.get(ref) || null;
   if (!el) el = document.elementFromPoint(cx, cy);
+  if (el && el.shadowRoot) {
+    try { el = el.shadowRoot.elementFromPoint(cx, cy) || el; } catch (e) {}
+  }
   if (!el) return { success: false, code: "target_not_found", error: "No element at point" };
   const isFile = n => n && n.tagName === "INPUT" && (n.getAttribute("type") || "").toLowerCase() === "file";
+  const deepQuery = (root, sel) => {
+    let found = null;
+    try { found = root.querySelector(sel); } catch (e) {}
+    if (found) return found;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n.shadowRoot) {
+        found = deepQuery(n.shadowRoot, sel);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
   let input = isFile(el) ? el : null;
   if (!input && el.tagName === "LABEL") {
     const c = (el.htmlFor && document.getElementById(el.htmlFor)) || el.querySelector("input[type=file]");
@@ -679,16 +698,45 @@ export function pageMarkUpload(ref, cx, cy) {
   }
   if (!input) {
     const scope = el.closest("form") || (el.parentElement && el.parentElement !== document.body ? el.parentElement : null);
-    if (scope) input = scope.querySelector("input[type=file]");
+    if (scope) input = scope.querySelector("input[type=file]") || deepQuery(scope, "input[type=file]");
   }
+  if (!input && el.shadowRoot) input = deepQuery(el.shadowRoot, "input[type=file]");
   if (!input) return { success: false, code: "no_file_input", error: "Target is not a file input and none was found in its form or parent" };
   document.querySelectorAll("[data-eab-upload]").forEach(n => n.removeAttribute("data-eab-upload"));
   input.setAttribute("data-eab-upload", "1");
+  const cs = window.getComputedStyle(input);
+  if (cs.display === "none" || cs.visibility === "hidden" || (input.offsetWidth === 0 && input.offsetHeight === 0)) {
+    input.dataset.eabPrevStyle = input.getAttribute("style") || "";
+    input.style.setProperty("display", "block", "important");
+    input.style.setProperty("visibility", "visible", "important");
+    input.style.setProperty("position", "fixed", "important");
+    input.style.setProperty("left", "0", "important");
+    input.style.setProperty("top", "0", "important");
+    input.style.setProperty("width", "4px", "important");
+    input.style.setProperty("height", "4px", "important");
+    input.style.setProperty("opacity", "0", "important");
+  }
   return { success: true, id: input.id || "", name: input.getAttribute("name") || "" };
 }
 
 export function pageUnmarkUpload() {
-  document.querySelectorAll("[data-eab-upload]").forEach(n => n.removeAttribute("data-eab-upload"));
+  const restore = root => {
+    root.querySelectorAll("[data-eab-upload]").forEach(n => {
+      n.removeAttribute("data-eab-upload");
+      if (n.dataset.eabPrevStyle !== undefined) {
+        const prev = n.dataset.eabPrevStyle;
+        delete n.dataset.eabPrevStyle;
+        if (prev) n.setAttribute("style", prev);
+        else n.removeAttribute("style");
+      }
+    });
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n.shadowRoot) restore(n.shadowRoot);
+    }
+  };
+  restore(document);
   return { success: true };
 }
 

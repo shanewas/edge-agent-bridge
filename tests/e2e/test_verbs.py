@@ -85,6 +85,7 @@ def test_upload_by_ref_button_and_failure(client, tmp_path):
     time.sleep(0.3)
     assert client("eval", {"code": "document.getElementById('upload-name').textContent"})["result"] == "hello.txt"
     assert client("eval", {"code": "document.querySelectorAll('[data-eab-upload]').length"})["result"] == 0
+    assert client("eval", {"code": "document.getElementById('attachment').getAttribute('style') || 'none'"})["result"] == "none"
 
     g = tmp_path / "second.txt"
     g.write_text("2", encoding="utf-8")
