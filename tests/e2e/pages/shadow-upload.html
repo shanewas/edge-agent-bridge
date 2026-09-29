@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shadow upload fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .plup { position: absolute; left: -9999px; opacity: 0; width: 1px; height: 1px; }
+  </style>
+</head>
+<body>
+  <h1>Upload variants</h1>
+
+  <x-uploader id="shadow-up"></x-uploader>
+  <div>Shadow picked: <span id="shadow-name"></span></div>
+
+  <div style="margin-top:20px">
+    <button type="button" id="plup-btn">Plupload style</button>
+    <input id="plup-input" type="file" class="plup" tabindex="-1">
+    <div>Plupload picked: <span id="plup-name"></span></div>
+  </div>
+
+  <script>
+    class XUploader extends HTMLElement {
+      constructor() {
+        super();
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML =
+          '<label for="f">Shadow choose</label>' +
+          '<input id="f" type="file">' +
+          '<span id="n"></span>';
+        const input = root.getElementById("f");
+        input.addEventListener("change", function () {
+          root.getElementById("n").textContent = this.files.length ? this.files[0].name : "";
+          document.getElementById("shadow-name").textContent = this.files.length ? this.files[0].name : "";
+        });
+      }
+    }
+    customElements.define("x-uploader", XUploader);
+    document.getElementById("plup-input").addEventListener("change", function () {
+      document.getElementById("plup-name").textContent = this.files.length ? this.files[0].name : "";
+    });
+  </script>
+</body>
+</html>

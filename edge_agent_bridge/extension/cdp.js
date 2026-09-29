@@ -205,8 +205,23 @@ export async function captureScreenshot(tabId, { format = "jpeg", quality = 80, 
 
 export async function setFileInputFiles(tabId, selector, files) {
   const doc = await cdpSend(tabId, "DOM.getDocument", { depth: 0 });
-  const { nodeId } = await cdpSend(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
-  if (!nodeId) throw new Error("marked file input not found in the main document");
+  let nodeId = null;
+  try {
+    const hit = await cdpSend(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
+    nodeId = hit && hit.nodeId ? hit.nodeId : null;
+  } catch (e) {}
+  if (!nodeId) {
+    const flat = await cdpSend(tabId, "DOM.getFlattenedDocument", { depth: -1, pierce: true });
+    const attr = selector.replace(/^\[|\]$/g, "").split("=")[0];
+    for (const n of (flat && flat.nodes) || []) {
+      const attrs = n.attributes || [];
+      for (let i = 0; i + 1 < attrs.length; i += 2) {
+        if (attrs[i] === attr) { nodeId = n.nodeId; break; }
+      }
+      if (nodeId) break;
+    }
+  }
+  if (!nodeId) throw new Error("marked file input not found in the document or its shadow trees");
   await cdpSend(tabId, "DOM.setFileInputFiles", { nodeId, files });
 }
 

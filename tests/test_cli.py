@@ -237,3 +237,51 @@ def test_cli_run_stdin(daemon, fake_ext):
     code, out, err = run_cli(["run", "-"], env=env, input_text=json.dumps([{"action": "ping"}]))
     assert code == 0, err
     assert json.loads(out)["success"] is True
+
+
+def test_cli_eval_file_reads_code_from_file(daemon, tmp_path):
+    seen = {}
+
+    def handler(action, params):
+        seen["code"] = params.get("code")
+        return {"success": True, "result": 1}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    js = tmp_path / "probe.js"
+    js.write_text("1 + 1", encoding="utf-8")
+    code, out, err = run_cli(["--json", "eval", "--file", str(js)], env=env)
+    assert code == 0, err
+    assert seen["code"] == "1 + 1"
+    ext.close()
+
+
+def test_cli_eval_file_stdin(daemon):
+    seen = {}
+
+    def handler(action, params):
+        seen["code"] = params.get("code")
+        return {"success": True, "result": 2}
+
+    ext = FakeExtension(daemon.port, handler=handler).connect().run()
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "eval", "--file", "-"], env=env, input_text="2 + 2")
+    assert code == 0, err
+    assert seen["code"] == "2 + 2"
+    ext.close()
+
+
+def test_cli_eval_without_code_or_file_exits_3(daemon):
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "eval"], env=env)
+    assert code == 3
+    import json as _json
+    assert _json.loads(out)["code"] == "bad_params"
+
+
+def test_cli_eval_missing_file_exits_3(daemon, tmp_path):
+    import json as _json
+    env = {"EDGE_BRIDGE_HOME": str(daemon.home), "EDGE_BRIDGE_PORT": str(daemon.port)}
+    code, out, err = run_cli(["--json", "eval", "--file", str(tmp_path / "nope.js")], env=env)
+    assert code == 3
+    assert _json.loads(out)["code"] == "file_not_found"

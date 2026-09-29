@@ -583,7 +583,8 @@ def main(argv=None) -> int:
 
     # eval
     p_eval = add_cmd("eval", help="Evaluate JavaScript expression in tab")
-    p_eval.add_argument("code")
+    p_eval.add_argument("code", nargs="?", default=None)
+    p_eval.add_argument("--file", default=None, help="Read JS from file ('-' for stdin)")
 
     # screenshot
     p_ss = add_cmd("screenshot", help="Capture screenshot")
@@ -878,7 +879,26 @@ def main(argv=None) -> int:
     elif action == "text":
         params["target"] = args.target
     elif action == "eval":
-        params["code"] = args.code
+        if args.file:
+            if args.file == "-":
+                params["code"] = sys.stdin.read()
+            else:
+                try:
+                    params["code"] = Path(args.file).read_text(encoding="utf-8")
+                except OSError as e:
+                    if opt_json:
+                        print(json.dumps({"success": False, "code": "file_not_found", "error": str(e)}))
+                    else:
+                        print(f"Error: cannot read --file: {e}", file=sys.stderr)
+                    return 3
+        elif args.code is not None:
+            params["code"] = args.code
+        else:
+            if opt_json:
+                print(json.dumps({"success": False, "code": "bad_params", "error": "eval needs code or --file"}))
+            else:
+                print("Error: 'eval' needs code or --file", file=sys.stderr)
+            return 3
     elif action == "screenshot":
         params["format"] = "png" if args.png else "jpeg"
         params["quality"] = args.quality

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.4.0
+
+- `upload` pierces open shadow roots and temp-reveals hidden file inputs: the
+  page marks the input through shadow trees, the worker resolves it with a
+  pierced CDP lookup, and styles are restored after. Fixes `no_file_input` on
+  Salesforce Lightning forms and `upload_failed (-32000)` on `display:none`
+  inputs. New e2e page `shadow-upload.html` covers both plus style restore.
+- `eval --file PATH` (`-` for stdin) runs JS from a file instead of a
+  shell-quoted argument.
+- New `edge_agent_bridge.doppelhand` companion client for OS-level file
+  dialogs: POST-only `shot`/`click`/`move`/`type`/`key`, `type_file_and_confirm`
+  helper, and a CSS-to-view coord mapper. Token via arg or `DOPPELHAND_TOKEN`.
+- New `docs/recipes.md`: shadow-DOM upload, `--file`, doppelhand fallback,
+  tight captcha chains via `run`.
+- E2E harness passes `--no-sandbox` to Edge when running as root (CI
+  containers, root-mapped WSL users).
+- Known issue: `test_fill_ref_in_cross_origin_frame` flakes under headless
+  Edge 154 + `--no-sandbox` in this environment; fails identically without
+  this release's changes.
 ## 2.3.0
 
 - `edge-bridge doctor` diagnoses daemon, token, extension, versions, tabs, pairing,
