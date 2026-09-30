@@ -9,19 +9,13 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/shanewas)
 [![Buy Me A Coffee](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/shanewas)
 
-Let an AI agent drive the Microsoft Edge you already have open, on the tab you are looking at.
+Let an AI agent drive the Microsoft Edge window you already have open, on the active tab on your screen.
 
-Playwright, Puppeteer and Selenium launch a clean profile. That profile has none of your cookies, so
-company SSO fails, bot checks fire, and anything behind a corporate VPN is out of reach. Edge Agent
-Bridge attaches to your running browser instead. Your session, your extensions and your logged-in
-state are all still there, and input goes in as trusted Chrome DevTools Protocol events rather than
-synthetic clicks a page can tell apart.
+Automating a clean browser profile drops existing cookies and auth state. Edge Agent Bridge attaches to your running browser instead, keeping active logins and extensions available while sending trusted Chrome DevTools Protocol events directly to the page.
 
-Three surfaces sit on one local daemon: an MCP server for agent clients, a CLI, and a Python API.
+A single background daemon provides the MCP server, CLI, and Python library.
 
-Everything here is tested against Microsoft Edge. The extension is plain MV3 and the daemon speaks
-ordinary CDP, so other Chromium browsers ought to work, but none are covered by the test suite and
-none are claimed.
+Tested on Microsoft Edge. The extension uses standard MV3 and speaks CDP, so other Chromium browsers may work, but Edge is the only tested target.
 
 ---
 
