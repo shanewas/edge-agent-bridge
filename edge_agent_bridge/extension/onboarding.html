@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Welcome to Edge Agent Bridge</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 40px 20px;
+      background: #181818;
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      line-height: 1.5;
+    }
+    .container {
+      width: 100%;
+      max-width: 640px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #333;
+    }
+    .header img {
+      width: 48px;
+      height: 48px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .status-card {
+      background: #222;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .status-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .status-desc {
+      font-size: 13px;
+      color: #aaa;
+    }
+    .badge {
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge.checking {
+      background: #333;
+      color: #aaa;
+    }
+    .badge.connected {
+      background: #1b4d3e;
+      color: #4ade80;
+    }
+    .badge.disconnected {
+      background: #5c1d1d;
+      color: #f87171;
+    }
+    .badge.outdated {
+      background: #5c431d;
+      color: #fbbf24;
+    }
+    .panel {
+      background: #222;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 16px;
+      color: #fff;
+    }
+    .step {
+      margin-bottom: 20px;
+    }
+    .step:last-child {
+      margin-bottom: 0;
+    }
+    .step-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ccc;
+      margin-bottom: 6px;
+    }
+    .cmd-box {
+      display: flex;
+      background: #141414;
+      border: 1px solid #2e2e2e;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .cmd-text {
+      flex: 1;
+      padding: 10px 14px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      color: #9cdcfe;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .copy-btn {
+      background: #2a2a2a;
+      border: none;
+      border-left: 1px solid #2e2e2e;
+      color: #ccc;
+      padding: 0 16px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .copy-btn:hover {
+      background: #0078d4;
+      color: #fff;
+    }
+    .tip {
+      font-size: 12px;
+      color: #888;
+      margin-top: 16px;
+      border-left: 3px solid #0078d4;
+      padding-left: 10px;
+    }
+    .success-panel {
+      display: none;
+      background: #1b3d2b;
+      border: 1px solid #2e7d4f;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .success-panel h2 {
+      margin-top: 0;
+      color: #4ade80;
+    }
+    .outdated-panel {
+      display: none;
+      background: #423014;
+      border: 1px solid #855d1d;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .outdated-panel h2 {
+      margin-top: 0;
+      color: #fbbf24;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="icons/icon48.png" alt="Icon">
+      <div>
+        <h1>Edge Agent Bridge Setup</h1>
+        <div style="font-size: 13px; color: #888;">Connect your browser to AI coding agents</div>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <div class="status-info">
+        <div class="status-title" id="statusTitle">Checking Daemon...</div>
+        <div class="status-desc" id="statusDesc">Polling 127.0.0.1:18999/status</div>
+      </div>
+      <div id="statusBadge" class="badge checking">Checking</div>
+    </div>
+
+    <!-- Success state -->
+    <div class="success-panel" id="successPanel">
+      <h2>Connected & Ready</h2>
+      <p>The extension is successfully paired with the local Edge Agent Bridge daemon.</p>
+      <p style="font-size: 13px; color: #ccc;">You can now use your agent (Claude Code, Gemini, Cursor, Codex, etc.) to drive open Edge tabs. Click the extension toolbar icon anytime to view live tabs or inspect logs.</p>
+    </div>
+
+    <!-- Outdated warning state -->
+    <div class="outdated-panel" id="outdatedPanel">
+      <h2>Version Mismatch</h2>
+      <p id="outdatedDesc">The local daemon and browser extension are on different versions.</p>
+      <div class="cmd-box">
+        <div class="cmd-text">py -m pip install -U edge-agent-bridge</div>
+        <button class="copy-btn" data-copy="py -m pip install -U edge-agent-bridge">Copy</button>
+      </div>
+    </div>
+
+    <!-- Instructions when offline -->
+    <div class="panel" id="instructionsPanel">
+      <h2>Start the Local Daemon</h2>
+      <p style="font-size: 13px; color: #aaa; margin-top: 0;">The browser extension needs the local Python daemon running on port 18999 to communicate with your agent.</p>
+
+      <div class="step">
+        <div class="step-title">1. Install or update the Python package</div>
+        <div class="cmd-box">
+          <div class="cmd-text">py -m pip install -U edge-agent-bridge</div>
+          <button class="copy-btn" data-copy="py -m pip install -U edge-agent-bridge">Copy</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-title">2. Start the bridge daemon</div>
+        <div class="cmd-box">
+          <div class="cmd-text">py -m edge_agent_bridge daemon start</div>
+          <button class="copy-btn" data-copy="py -m edge_agent_bridge daemon start">Copy</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-title">3. Configure your AI agent client (optional)</div>
+        <div class="cmd-box">
+          <div class="cmd-text">py -m edge_agent_bridge setup</div>
+          <button class="copy-btn" data-copy="py -m edge_agent_bridge setup">Copy</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-title">Troubleshooting & Health Check</div>
+        <div class="cmd-box">
+          <div class="cmd-text">py -m edge_agent_bridge doctor</div>
+          <button class="copy-btn" data-copy="py -m edge_agent_bridge doctor">Copy</button>
+        </div>
+      </div>
+
+      <div class="tip">
+        <strong>PATH-proof commands:</strong> Leading with <code>py -m</code> works even if <code>edge-bridge</code> is not recognized in your terminal. Once the daemon starts, this page will update automatically.
+      </div>
+    </div>
+  </div>
+
+  <script src="onboarding.js"></script>
+</body>
+</html>

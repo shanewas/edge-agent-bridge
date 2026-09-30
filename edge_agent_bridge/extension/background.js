@@ -140,4 +140,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "sw_watchdog") connectWebSocket();
 });
 
+// Open onboarding tab on initial extension install
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
+  }
+});
+
 connectWebSocket();

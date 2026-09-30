@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.0
+
+- PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
+  delegate directly to the CLI, allowing commands to run even when `edge-bridge`
+  is not recognized on PATH.
+- `edge-bridge doctor` adds `launcher`, `path`, and Windows `elevation` diagnostics:
+  identifies missing scripts, broken PATH, stale installs, and elevated shells with
+  targeted remediation commands. Machine-parseable `--json` output remains strictly clean.
+- `edge-bridge setup --fix-path` (Windows): safely appends the Python scripts directory
+  to user PATH in HKCU with duplicate checking, 2047-character guard, confirmation
+  prompt (`--yes` to skip), and `WM_SETTINGCHANGE` broadcast.
+- Extension onboarding: fresh extension installs open `onboarding.html` on first install
+  probing local daemon status, offering copyable `py -m` startup commands, upgrade nudges
+  on version mismatch, and real-time connection state.
+
 ## 2.4.0
 
 - `upload` pierces open shadow roots and temp-reveals hidden file inputs: the

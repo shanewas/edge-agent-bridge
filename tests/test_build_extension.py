@@ -98,3 +98,23 @@ def test_popup_error_box_and_actions_wired():
     assert '"token"' not in diag and '"url"' not in diag and "tabInfo" not in diag
     bg = (EXT / "background.js").read_text(encoding="utf-8")
     assert "lastError" in bg
+
+
+def test_onboarding_page_and_install_hook_wired():
+    html_path = EXT / "onboarding.html"
+    js_path = EXT / "onboarding.js"
+    assert html_path.exists()
+    assert js_path.exists()
+
+    html = html_path.read_text(encoding="utf-8")
+    assert "onboarding.js" in html
+    assert "py -m edge_agent_bridge" in html
+
+    js = js_path.read_text(encoding="utf-8")
+    assert "18999/status" in js
+    assert "extension_connected" in js
+    assert "extension_outdated" in js
+
+    bg = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "onInstalled" in bg
+    assert "onboarding.html" in bg
