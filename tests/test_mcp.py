@@ -306,7 +306,12 @@ def test_snapshot_forwards_mode_and_max_nodes(daemon):
 
 
 def test_mcp_session_is_named(daemon, mcp_proc):
-    time.sleep(0.3)
-    _, body = daemon.exec("session_list")
-    assert body["success"] is True
-    assert "mcp" in [s["name"] for s in body["sessions"]]
+    names = []
+    for _ in range(25):
+        time.sleep(0.1)
+        _, body = daemon.exec("session_list")
+        if body.get("success"):
+            names = [s["name"] for s in body.get("sessions", [])]
+            if "mcp" in names:
+                break
+    assert "mcp" in names

@@ -161,6 +161,68 @@ def mcp_config_cli(client: str) -> int:
     return 0
 
 
+# New shells ignore a user PATH past this length, so refuse rather than write one.
+HKCU_PATH_LIMIT = 2047
+
+
+def fix_path(yes: bool = False) -> int:
+    """CLI handler for `edge-bridge setup --fix-path`."""
+    if sys.platform != "win32":
+        print("setup --fix-path is only supported on Windows")
+        return 3
+    import sysconfig
+    import winreg
+    scripts_dir = sysconfig.get_path("scripts")
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ) as key:
+            try:
+                current, reg_type = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current, reg_type = "", winreg.REG_EXPAND_SZ
+    except OSError as e:
+        print(f"Cannot read the user PATH: {e}")
+        return 1
+
+    def norm(p):
+        return p.replace("/", "\\").rstrip("\\").casefold()
+
+    want = norm(scripts_dir)
+    if any(norm(e) == want for e in current.split(";") if e):
+        print(f"{scripts_dir} is already on the user PATH; nothing to do.")
+        return 0
+    new_path = f"{current};{scripts_dir}" if current else scripts_dir
+    if len(new_path) > HKCU_PATH_LIMIT:
+        print(f"Refusing: the resulting PATH would be {len(new_path)} chars, "
+              f"over the {HKCU_PATH_LIMIT}-char HKCU limit. Shorten the user PATH first.")
+        return 1
+    print(f"Will append to the user PATH (HKCU\\Environment):\n  {scripts_dir}")
+    if not yes:
+        try:
+            resp = input("Update the user PATH now? [y/N]: ").strip().lower()
+            if resp not in ("y", "yes"):
+                print("Aborted.")
+                return 0
+        except (KeyboardInterrupt, EOFError):
+            print("\nAborted.")
+            return 0
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
+    except OSError as e:
+        print(f"Cannot update the user PATH: {e}")
+        return 1
+    try:
+        import ctypes
+        result = ctypes.c_ulong()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result)
+        )
+    except Exception as e:
+        print(f"Warning: PATH written but the broadcast failed ({e}); new shells may miss it.")
+    print("User PATH updated. Reopen your terminal for the new PATH to take effect.")
+    return 0
+
+
 def setup_cli(yes: bool = False) -> int:
     """CLI handler for `edge-bridge setup`."""
     print("Edge Agent Bridge Setup — Client Auto-Detection")

@@ -32,6 +32,26 @@ pip install edge-agent-bridge
 
 Python 3.10 or newer, with no third-party packages at install time or runtime.
 
+### Windows (PATH-proof)
+
+If `edge-bridge` is not recognized after install (your Python `Scripts` directory is not on your user PATH), you can:
+
+1. **Use `py -m` directly** — works out of the box with no PATH changes:
+   ```powershell
+   py -m edge_agent_bridge daemon start
+   py -m edge_agent_bridge setup
+   ```
+2. **Auto-repair your PATH**:
+   ```powershell
+   py -m edge_agent_bridge setup --fix-path
+   ```
+   then reopen your terminal.
+3. **If using `pipx`**: run `pipx ensurepath` and restart your shell.
+4. **Diagnose install issues**:
+   ```powershell
+   py -m edge_agent_bridge doctor
+   ```
+
 Then install the companion extension directly from the
 **[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Edge Agent Bridge**), or load it unpacked while you're developing:
 

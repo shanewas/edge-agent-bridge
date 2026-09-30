@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 import pytest
 from edge_agent_bridge import setup
@@ -105,3 +106,127 @@ def test_detect_clients(monkeypatch, tmp_path):
     assert detected["cli"]["gemini"] is None
     assert detected["json"]["cursor"]["found"] is True
     assert detected["json"]["windsurf"]["found"] is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="non-win32 refusal only")
+def test_setup_fix_path_refuses_off_windows():
+    from tests.support import run_cli
+    code, out, err = run_cli(["setup", "--fix-path"])
+    assert code == 3
+    assert "only supported on Windows" in out
+
+
+class _FakeKey:
+    def __init__(self, fake):
+        self.fake = fake
+
+    def __enter__(self):
+        return self.fake
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeWinreg:
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_READ = 1
+    KEY_SET_VALUE = 2
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, path_value=None, reg_type=2):
+        self.values = {}
+        if path_value is not None:
+            self.values["Path"] = (path_value, reg_type)
+        self.writes = []
+
+    def OpenKey(self, hive, subkey, reserved=0, access=0):
+        assert hive == self.HKEY_CURRENT_USER
+        assert subkey == "Environment"
+        return _FakeKey(self)
+
+    def QueryValueEx(self, key, name):
+        if name not in self.values:
+            raise FileNotFoundError(name)
+        return self.values[name]
+
+    def SetValueEx(self, key, name, reserved, typ, value):
+        self.writes.append((name, typ, value))
+        self.values[name] = (value, typ)
+
+
+class _FakeUser32:
+    def __init__(self):
+        self.calls = []
+
+    def SendMessageTimeoutW(self, *args):
+        self.calls.append(args)
+        return 1
+
+
+def _stage_windows(monkeypatch, path_value=None):
+    import ctypes
+    from types import SimpleNamespace
+    fake_reg = _FakeWinreg(path_value)
+    fake_u32 = _FakeUser32()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", fake_reg)
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=fake_u32), raising=False)
+    return fake_reg, fake_u32
+
+
+def test_fix_path_appends_and_broadcasts(monkeypatch, capsys):
+    import sysconfig
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, "C:\\Windows")
+    rc = setup.fix_path(yes=True)
+    assert rc == 0
+    scripts = sysconfig.get_path("scripts")
+    assert fake_reg.writes == [("Path", _FakeWinreg.REG_EXPAND_SZ, f"C:\\Windows;{scripts}")]
+    assert len(fake_u32.calls) == 1
+    assert "Environment" in fake_u32.calls[0]
+    assert "Reopen your terminal" in capsys.readouterr().out
+
+
+def test_fix_path_dedup_is_case_insensitive(monkeypatch, capsys):
+    import sysconfig
+    scripts = sysconfig.get_path("scripts")
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, f"C:\\Windows;{scripts.upper()}")
+    rc = setup.fix_path(yes=True)
+    assert rc == 0
+    assert fake_reg.writes == []
+    assert fake_u32.calls == []
+    assert "already on the user PATH" in capsys.readouterr().out
+
+
+def test_fix_path_missing_value_writes_scripts_only(monkeypatch, capsys):
+    import sysconfig
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, None)
+    rc = setup.fix_path(yes=True)
+    assert rc == 0
+    assert fake_reg.writes == [("Path", _FakeWinreg.REG_EXPAND_SZ, sysconfig.get_path("scripts"))]
+
+
+def test_fix_path_refuses_overlong_path(monkeypatch, capsys):
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, "x" * 2047)
+    rc = setup.fix_path(yes=True)
+    assert rc == 1
+    assert "2047" in capsys.readouterr().out
+    assert fake_reg.writes == []
+    assert fake_u32.calls == []
+
+
+def test_fix_path_confirms_before_writing(monkeypatch, capsys):
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, "C:\\Windows")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    assert setup.fix_path() == 0
+    assert len(fake_reg.writes) == 1
+    assert len(fake_u32.calls) == 1
+
+
+def test_fix_path_abort_writes_nothing(monkeypatch, capsys):
+    fake_reg, fake_u32 = _stage_windows(monkeypatch, "C:\\Windows")
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    assert setup.fix_path() == 0
+    assert "Aborted" in capsys.readouterr().out
+    assert fake_reg.writes == []
+    assert fake_u32.calls == []

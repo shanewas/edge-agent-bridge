@@ -6,9 +6,11 @@ Allows the agent or user to drive Microsoft Edge directly via command line.
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
@@ -95,6 +97,19 @@ def _status_data(edge: Edge, port: int):
     return res, pid
 
 
+def _is_elevated() -> bool:
+    if sys.platform != "win32":
+        return False
+    override = os.environ.get("EDGE_BRIDGE_TEST_ELEVATED")
+    if override is not None:
+        return override == "1"
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 def _handle_doctor(port: int, opt_json: bool) -> int:
     checks = []
 
@@ -169,6 +184,37 @@ def _handle_doctor(port: int, opt_json: bool) -> int:
         add("pid", False, f"stale pid file at {pid_p}", "edge-bridge daemon restart")
     else:
         add("pid", True, "no stale pid file" if up else "no pid file", "")
+
+    scripts_dir = sysconfig.get_path("scripts")
+    launcher_name = "edge-bridge.exe" if sys.platform == "win32" else "edge-bridge"
+    found = shutil.which(launcher_name)
+    if found:
+        add("launcher", True, f"resolved at {found}", "")
+    elif (Path(scripts_dir) / launcher_name).exists():
+        add("launcher", False, f"present at {scripts_dir} but that dir is not on PATH",
+            "edge-bridge setup --fix-path")
+    else:
+        add("launcher", False, f"missing from {scripts_dir} (stale install?)",
+            "py -m pip install --force-reinstall edge-agent-bridge")
+
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if sys.platform == "win32":
+        on_path = os.path.normcase(scripts_dir) in [os.path.normcase(e) for e in path_entries]
+    else:
+        on_path = scripts_dir in path_entries
+    if on_path:
+        add("path", True, f"{scripts_dir} on PATH", "")
+    else:
+        add("path", False, f"{scripts_dir} not on PATH", "edge-bridge setup --fix-path")
+
+    if sys.platform != "win32":
+        add("elevation", True, "not applicable", "")
+    elif _is_elevated():
+        add("elevation", False,
+            "running elevated: the daemon pairs per OS user and Edge runs unelevated",
+            "use a normal non-admin PowerShell")
+    else:
+        add("elevation", True, "running unelevated", "")
 
     from .setup import registration_status
     try:
@@ -621,6 +667,7 @@ def main(argv=None) -> int:
     # setup
     p_setup = add_cmd("setup", help="Auto-configure detected MCP clients")
     p_setup.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+    p_setup.add_argument("--fix-path", action="store_true", help="Append the scripts dir to the user PATH (Windows)")
 
     args = parser.parse_args(argv)
     if not args.cmd:
@@ -681,7 +728,9 @@ def main(argv=None) -> int:
         from .setup import mcp_config_cli
         return mcp_config_cli(args.client)
     if args.cmd == "setup":
-        from .setup import setup_cli
+        from .setup import fix_path, setup_cli
+        if getattr(args, "fix_path", False):
+            return fix_path(yes=getattr(args, "yes", False))
         return setup_cli(yes=getattr(args, "yes", False))
     if args.cmd == "doctor":
         return _handle_doctor(port, opt_json)
