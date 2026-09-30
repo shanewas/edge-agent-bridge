@@ -33,34 +33,25 @@ pip install edge-agent-bridge
 
 Python 3.10 or newer, with no third-party packages at install time or runtime.
 
-### Windows (PATH-proof)
+### Windows
 
-If `edge-bridge` is not recognized after install (your Python `Scripts` directory is not on your user PATH), you can:
+When `edge-bridge` isn't recognized after install (Python's `Scripts` folder isn't on your PATH), run commands with `py -m`:
 
-1. **Use `py -m` directly** — works out of the box with no PATH changes:
-   ```powershell
-   py -m edge_agent_bridge daemon start
-   py -m edge_agent_bridge setup
-   ```
-2. **Auto-repair your PATH**:
-   ```powershell
-   py -m edge_agent_bridge setup --fix-path
-   ```
-   then reopen your terminal.
-3. **If using `pipx`**: run `pipx ensurepath` and restart your shell.
-4. **Diagnose install issues**:
-   ```powershell
-   py -m edge_agent_bridge doctor
-   ```
+```powershell
+py -m edge_agent_bridge daemon start
+py -m edge_agent_bridge setup
+```
+
+To add `Scripts` to your user PATH automatically, run `py -m edge_agent_bridge setup --fix-path` and reopen your terminal. If you're using `pipx`, run `pipx ensurepath`. To check launcher and environment health, run `py -m edge_agent_bridge doctor`.
 
 Then install the companion extension directly from the
-**[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Edge Agent Bridge**) or the **[Chrome Web Store](https://chromewebstore.google.com/detail/edge-agent-bridge/lknjdleggnheadkkjfngphdbcglalmmg?authuser=1&hl=en)**, or load it unpacked while you're developing:
+**[Microsoft Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/agent-browser-bridge/dfkieodkfepoidihjapiggpjmfapanpd)** (**Edge Agent Bridge**) or the **[Chrome Web Store](https://chromewebstore.google.com/detail/edge-agent-bridge/lknjdleggnheadkkjfngphdbcglalmmg?authuser=1&hl=en)**, or load the extension from the local folder while developing:
 
 ```bash
 edge-bridge extension open     # opens the bundled extension directory
 ```
 
-Turn on **Developer mode** at `edge://extensions`, click **Load unpacked**, and pick that
+Turn on **Developer mode** at `edge://extensions`, select the opened extension folder, and pick that
 directory. Start the daemon and verify Edge connected:
 
 ```bash
