@@ -82,8 +82,8 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   store:
-    needs: [gate, pypi]
-    if: needs.gate.outputs.pypi_new == 'true' && needs.gate.outputs.ext_changed == 'true'
+    needs: gate
+    if: (needs.gate.outputs.pypi_new == 'true' || inputs.force_extension) && needs.gate.outputs.ext_changed == 'true'
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -104,8 +104,8 @@ jobs:
             --notes "Automated submission of $VERSION from ${{ github.sha }}"
 
   chrome:
-    needs: [gate, pypi]
-    if: needs.gate.outputs.pypi_new == 'true' && needs.gate.outputs.ext_changed == 'true'
+    needs: gate
+    if: (needs.gate.outputs.pypi_new == 'true' || inputs.force_extension) && needs.gate.outputs.ext_changed == 'true'
     runs-on: ubuntu-latest
     environment: release
     # The same package goes to both stores. Chrome review is slower and stricter about the
