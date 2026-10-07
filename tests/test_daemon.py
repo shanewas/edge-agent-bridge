@@ -1,9 +1,27 @@
 import http.client
+import json
 import struct
 import threading
 import time
 import pytest
 from tests.fake_extension import FakeExtension
+from tests.support import DaemonHandle, free_port
+
+
+def _wait_active(daemon, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if daemon.status().get("websocket_active"):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _wait_closed(ext, timeout=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline and ext.closed_with is None:
+        time.sleep(0.05)
+    return ext.closed_with
 
 
 def test_status_reports_running(daemon):
@@ -113,6 +131,7 @@ def test_offline_fails_fast_then_succeeds_after_connect(daemon):
     assert code == 504 and body["code"] == "extension_offline"
     assert time.time() - start < 2.0
     ext = FakeExtension(daemon.port).connect().run()
+    assert _wait_active(daemon)
     code, body = daemon.exec("ping", timeout=6)
     assert code == 200 and body["success"] is True
     ext.close()
@@ -136,6 +155,7 @@ def test_unaccepted_socket_fails_fast_until_grace_passes(daemon):
 
 def test_inflight_timeout_and_late_result_dropped(daemon):
     ext = FakeExtension(daemon.port).connect().run()
+    assert _wait_active(daemon)
     code, body = daemon.exec("sleep", {"ms": 2500}, timeout=1)
     assert code == 504 and body["code"] == "timeout"
     time.sleep(2)                       # late result arrives, nobody waits
@@ -150,3 +170,85 @@ def test_extension_outdated_rewrite(daemon):
     assert code == 200 and body["code"] == "extension_outdated" and "2.0.0" in body["error"]
     assert daemon.status()["extension_outdated"] is True
     ext.close()
+
+
+@pytest.fixture
+def paired_daemon(tmp_path):
+    (tmp_path / "config").write_text("pairing=1\n", encoding="utf-8")
+    handle = DaemonHandle(free_port(), tmp_path).start()
+    assert handle.status()["pairing_required"] is True
+    yield handle
+    handle.stop()
+
+
+def test_bad_pairing_token_does_not_disconnect_paired_extension(paired_daemon):
+    real = FakeExtension(paired_daemon.port, version="2.5.0", token=paired_daemon.token).connect().run()
+    assert _wait_active(paired_daemon)
+
+    intruder = FakeExtension(paired_daemon.port, version="9.9.9", token="0" * 64).connect().run()
+    assert _wait_closed(intruder) == 4001
+
+    status = paired_daemon.status()
+    assert status["websocket_active"] is True
+    assert status["extension_version"] == "2.5.0"
+    assert real.closed_with is None
+    code, body = paired_daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True and body["version"] == "2.5.0"
+    intruder.close()
+    real.close()
+
+
+def test_unpaired_socket_without_hello_does_not_displace_paired_extension(paired_daemon):
+    real = FakeExtension(paired_daemon.port, token=paired_daemon.token).connect().run()
+    assert _wait_active(paired_daemon)
+    lurker = FakeExtension(paired_daemon.port, send_hello=False).connect().run()
+    time.sleep(1.5)                     # longer than the pairing-off grace window
+    assert paired_daemon.status()["websocket_active"] is True
+    code, body = paired_daemon.exec("ping", timeout=3)
+    assert code == 200 and body["success"] is True
+    assert not any("action" in m for m in lurker.received)
+    lurker.close()
+    real.close()
+
+
+def test_results_from_unaccepted_socket_are_ignored(paired_daemon):
+    release = threading.Event()
+
+    def slow(action, params):
+        release.wait(5)
+        return {"success": True, "from": "real"}
+
+    real = FakeExtension(paired_daemon.port, token=paired_daemon.token, handler=slow).connect().run()
+    assert _wait_active(paired_daemon)
+    lurker = FakeExtension(paired_daemon.port, send_hello=False).connect()
+
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=paired_daemon.exec("ping", timeout=5)))
+    t.start()
+    deadline = time.time() + 3
+    while time.time() < deadline and not any("action" in m for m in real.received):
+        time.sleep(0.02)
+    cmd = next(m for m in real.received if "action" in m)
+    lurker.send_text(json.dumps({"id": cmd["id"], "result": {"success": True, "from": "lurker"}}))
+    time.sleep(0.3)
+    release.set()
+    t.join(timeout=10)
+    code, body = out["r"]
+    assert code == 200 and body["from"] == "real"
+    lurker.close()
+    real.close()
+
+
+def test_new_hello_replaces_stale_connection_without_pairing(daemon):
+    old = FakeExtension(daemon.port, version="2.0.0").connect().run()
+    assert _wait_active(daemon)
+    new = FakeExtension(daemon.port, version="2.0.1").connect().run()
+    deadline = time.time() + 3
+    while time.time() < deadline and daemon.status()["extension_version"] != "2.0.1":
+        time.sleep(0.05)
+    assert daemon.status()["extension_version"] == "2.0.1"
+    assert _wait_closed(old) is not None
+    code, body = daemon.exec("ping", timeout=3)
+    assert code == 200 and body["version"] == "2.0.1"
+    new.close()
+    old.close()

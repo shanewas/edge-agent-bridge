@@ -60,6 +60,7 @@ class WebSocketConnection:
         self.sock = sock
         self.closed = False
         self._write_lock = threading.Lock()
+        self.grace_timer: threading.Timer | None = None
 
     def send_frame(self, opcode: int, data: bytes) -> bool:
         if self.closed:
@@ -148,7 +149,6 @@ class BridgeState:
         self.last_seen: float = 0.0
         self.last_pong: float = 0.0
         self.last_ping_sent: float = 0.0
-        self._grace_timer: threading.Timer | None = None
 
     def mark_seen(self):
         self.last_seen = time.time()
@@ -157,16 +157,29 @@ class BridgeState:
         self.last_pong = time.monotonic()
         self.mark_seen()
 
-    def accept_extension_locked(self):
-        self.ext_accepted = True
-        if self._grace_timer:
-            self._grace_timer.cancel()
-            self._grace_timer = None
-        self._drain_held_locked()
+    def is_active_locked(self, ws: WebSocketConnection) -> bool:
+        return self.ext is ws and self.ext_accepted and not ws.closed
 
-    def accept_extension(self):
-        with self.lock:
-            self.accept_extension_locked()
+    def accept_extension_locked(self, ws: WebSocketConnection, version: str | None):
+        """Make ws the extension connection. Called only once ws has passed hello/pairing (or the
+        pairing-off grace window), so a socket that never authenticates cannot displace the live one."""
+        if ws.grace_timer:
+            ws.grace_timer.cancel()
+            ws.grace_timer = None
+        if ws.closed:
+            return
+        old = self.ext
+        if old is not ws:
+            if old is not None:
+                old.close()
+            self.ext = ws
+            now = time.monotonic()
+            self.last_pong = now
+            self.last_ping_sent = now
+        self.ext_version = version
+        self.ext_accepted = True
+        self.mark_seen()
+        self._drain_held_locked()
 
     def _drain_held_locked(self):
         now = time.time()
@@ -178,12 +191,12 @@ class BridgeState:
 
     def on_ws_closed(self, ws: WebSocketConnection):
         with self.lock:
+            if ws.grace_timer:
+                ws.grace_timer.cancel()
+                ws.grace_timer = None
             if self.ext is ws:
                 self.ext = None
                 self.ext_accepted = False
-                if self._grace_timer:
-                    self._grace_timer.cancel()
-                    self._grace_timer = None
 
     def session_create_locked(self, name: str | None = None) -> str:
         token = str(uuid.uuid4())
@@ -373,28 +386,20 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Sec-WebSocket-Accept", accept_str)
             self.end_headers()
 
+            # The Origin header is spoofable by any local process, so the new socket stays a
+            # candidate and does not touch the live extension connection until it is accepted.
             ws_conn = WebSocketConnection(self.connection)
-            with state.lock:
-                if state.ext:
-                    try:
-                        state.ext.close()
-                    except Exception:
-                        pass
-                state.ext = ws_conn
-                state.ext_version = None
-                state.ext_accepted = False
-                state.last_pong = time.monotonic()
-                state.last_ping_sent = time.monotonic()
-                state.mark_seen()
-
-                if not state.pairing_required:
-                    def grace_timeout():
-                        with state.lock:
-                            if state.ext is ws_conn and not state.ext_accepted:
-                                state.accept_extension_locked()
-                    state._grace_timer = threading.Timer(1.0, grace_timeout)
-                    state._grace_timer.daemon = True
-                    state._grace_timer.start()
+            if not state.pairing_required:
+                # Extensions older than 2.0 send no hello; without pairing they are accepted
+                # after a short grace window.
+                def grace_timeout():
+                    with state.lock:
+                        if state.ext is not ws_conn:
+                            state.accept_extension_locked(ws_conn, None)
+                with state.lock:
+                    ws_conn.grace_timer = threading.Timer(1.0, grace_timeout)
+                    ws_conn.grace_timer.daemon = True
+                    ws_conn.grace_timer.start()
 
             self.close_connection = True
             self.connection.settimeout(60.0)
@@ -451,12 +456,16 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                     m = mask * (len(payload) // 4) + mask[:len(payload) % 4]
                     payload = (int.from_bytes(payload, "big") ^ int.from_bytes(m, "big")).to_bytes(len(payload), "big")
 
-                state.mark_seen()
+                with state.lock:
+                    active = state.is_active_locked(ws_conn)
+                    if active:
+                        state.mark_seen()
 
                 if opcode == 9:  # Ping
                     ws_conn.send_pong(payload)
                 elif opcode == 10:  # Pong
-                    state.mark_pong()
+                    if active:
+                        state.mark_pong()
                 elif opcode == 8:  # Close
                     break
                 else:
@@ -484,28 +493,35 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
         if not isinstance(data, dict):
             return
 
-        if data.get("pong") is True:
-            state.mark_pong()
-
         if "hello" in data and isinstance(data["hello"], dict):
             hello = data["hello"]
-            state.ext_version = hello.get("version")
+            version = hello.get("version")
+            if not isinstance(version, str):
+                version = None
             if state.pairing_required:
-                token = hello.get("token") or ""
-                if hmac.compare_digest(token, state.token):
-                    state.accept_extension()
-                else:
+                token = hello.get("token")
+                if not isinstance(token, str) or not hmac.compare_digest(
+                        token.encode("utf-8"), state.token.encode("utf-8")):
+                    # Closing only this socket: the accepted extension, if any, stays connected.
                     logger.warning("Pairing token mismatch from extension hello; closing 4001")
                     ws_conn.close_with_code(4001, "pairing_failed")
                     return
-            else:
-                state.accept_extension()
+            with state.lock:
+                state.accept_extension_locked(ws_conn, version)
+
+        with state.lock:
+            if not state.is_active_locked(ws_conn):
+                # Pongs and results from a socket that has not been accepted are ignored.
+                return
+
+        if data.get("pong") is True:
+            state.mark_pong()
 
         if "id" in data and "result" in data:
             cmd_id = data["id"]
             result = data["result"]
             with state.lock:
-                if cmd_id in state.pending:
+                if cmd_id in state.pending and state.is_active_locked(ws_conn):
                     is_v1 = False
                     if state.ext_version is None:
                         is_v1 = True
