@@ -6,6 +6,15 @@
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `daemon stop` and `daemon restart` kill only when `/status` on the configured
+  port reports the PID in `bridge.pid`. A stale file left by a crash or reboot is
+  deleted and nothing is killed, so a recycled PID no longer takes down an
+  unrelated process. `--force` keeps the old unconditional kill for a hung daemon.
+- `/status` reports the daemon's `pid`; `status` and `daemon status` print it
+  from there instead of reading `bridge.pid`.
+- Windows: the daemon no longer sets `SO_REUSEADDR`, so a second daemon on a busy
+  port fails with `WinError 10048` and exits 1 instead of binding silently and
+  overwriting `bridge.pid`.
 
 ## 2.5.0
 
