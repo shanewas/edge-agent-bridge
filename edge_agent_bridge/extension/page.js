@@ -599,17 +599,28 @@ export async function pageResolve(query, opts) {
   }
   if (o.highlight !== false) L.highlight(r, ref);
   const role = L.roleOf(el);
+  // The text action reads the resolved element itself, not whatever sits at
+  // its center: containers would return one child, display:none the corner.
+  let ownText = null;
+  if (o.wantText) {
+    const tagName = el.tagName.toLowerCase();
+    if (tagName === "input" || tagName === "textarea" || tagName === "select") ownText = el.value || "";
+    else ownText = el.innerText || el.textContent || "";
+  }
   return {
     found: true,
     rendered,
     x: c.x + info.x,
     y: c.y + info.y,
+    // Frame-local center for hit-testing inside the ref's own frame; x/y are top-level for CDP.
+    local: { x: c.x, y: c.y },
     width: Math.round(r.width),
     height: Math.round(r.height),
     tag: el.tagName.toLowerCase(),
     id: el.id || "",
     ref,
     role,
+    ownText,
     text: L.nameOf(el, role).slice(0, 60)
   };
 }
