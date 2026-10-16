@@ -165,6 +165,13 @@ function normalizeReadValue(v) {
   return String(v);
 }
 
+// Rich editors pad innerText with newlines and store typed spaces as U+00A0.
+function writeMatches(readback, written, field) {
+  if (field !== "contenteditable") return readback === written;
+  const norm = (s) => s.replace(/\u00a0/g, " ").replace(/^\n+|\n+$/g, "");
+  return norm(readback) === norm(written);
+}
+
 // Pre-assert focus on mode ({x,y} or {active:true}) in frameId. Returns {ok} or {ok:false, result}.
 async function preAssertFocus(tabId, frameId, mode, uuid) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -620,11 +627,13 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { typedSoFar: 0, remaining: text } });
         }
         let mode;
+        let pt;
         let frameId;
         if (target || hasCoords(p)) {
           const loc = await locate(tabId, p, "type");
           if (!loc.ok) return loc.result;
-          mode = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          pt = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          mode = loc.info.local || pt;
           frameId = frameOfRef(p.ref || p.target || p.selector);
         } else {
           mode = { active: true };
@@ -634,8 +643,8 @@ export async function execute(cmd) {
         const hasDbg = await attach(tabId);
         try {
           if (hasDbg && (target || hasCoords(p))) {
-            await nativeClick(tabId, mode.x, mode.y, "left", 1);
-            showCursor(tabId, mode.x, mode.y, true, p);
+            await nativeClick(tabId, pt.x, pt.y, "left", 1);
+            showCursor(tabId, pt.x, pt.y, true, p);
           }
           const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : null;
@@ -681,7 +690,7 @@ export async function execute(cmd) {
           }
           const written = valueBefore === null ? text : valueBefore + text;
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: readback === written };
+          return { success: true, text, native: hasDbg, chars: chars.length, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field };
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
@@ -696,14 +705,16 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { written: text } });
         }
         let mode = null;
+        let pt = null;
         let frameId = frameOfRef(p.ref || p.target || p.selector);
         let targetInfo = {};
         if (hasCoords(p) && !target) {
-          mode = { x: Number(p.x), y: Number(p.y) };
+          mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
           const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
-          mode = { x: r.x, y: r.y };
+          pt = { x: r.x, y: r.y };
+          mode = r.local || pt;
           targetInfo = r;
         } else {
           mode = { active: true };
@@ -720,12 +731,12 @@ export async function execute(cmd) {
           let native = false;
           if (hasDbg && hasPoint) {
             try {
-              await nativeClick(tabId, mode.x, mode.y, "left", 1);
-              showCursor(tabId, mode.x, mode.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear]);
+              await nativeClick(tabId, pt.x, pt.y, "left", 1);
+              showCursor(tabId, pt.x, pt.y, true, p);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text]);
+              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
@@ -745,7 +756,7 @@ export async function execute(cmd) {
             return { success: true, text, native, written, readback: null, match: "unknown", ...targetInfo };
           }
           const readback = normalizeReadValue(rb.value);
-          return { success: true, text, native, written, readback, match: readback === written, ...targetInfo };
+          return { success: true, text, native, written, readback, match: writeMatches(readback, written, rb.field), field: rb.field, ...targetInfo };
         } finally {
           await releaseAssert(tabId, frameId, uuid);
         }
