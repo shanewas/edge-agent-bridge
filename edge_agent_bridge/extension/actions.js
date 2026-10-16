@@ -251,16 +251,17 @@ export async function execute(cmd) {
       case "nav": {
         const url = p.url;
         if (!url) return fail("bad_params", "nav requires url");
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
         let tab = await getTargetTab(tabId);
         if (tab) await attach(tab.id);
         if (!tab) {
           tab = await chrome.tabs.create({ url });
-          const loaded = await waitForTabLoad(tab.id, 15000, true);
+          const loaded = await waitForTabLoad(tab.id, loadTimeout, true);
           const created = await chrome.tabs.get(tab.id);
           if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: created.url, tab: tabInfo(created) });
           return { success: true, title: created.title, url: created.url, tab: tabInfo(created) };
         } else {
-          const pending = waitForTabLoad(tab.id);
+          const pending = waitForTabLoad(tab.id, loadTimeout);
           await chrome.tabs.update(tab.id, { url });
           if (p.wait === "none") {
             const t0 = await chrome.tabs.get(tab.id);
@@ -271,10 +272,6 @@ export async function execute(cmd) {
           if (!ok) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: t.url, tab: tabInfo(t) });
           return { success: true, title: t.title, url: t.url, tab: tabInfo(t) };
         }
-        const loaded = await waitForTabLoad(tab.id);
-        const updatedTab = await chrome.tabs.get(tab.id);
-        if (!loaded) return fail("nav_timeout", `Navigation to ${url} timed out`, { url: updatedTab.url, tab: tabInfo(updatedTab) });
-        return { success: true, title: updatedTab.title, url: updatedTab.url, tab: tabInfo(updatedTab) };
       }
 
       case "tab_new": {
@@ -305,7 +302,8 @@ export async function execute(cmd) {
             group = { code: "group_unsupported", error: e.message };
           }
         }
-        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, 15000, true);
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        if (p.wait !== "none" && url !== "about:blank") await waitForTabLoad(tab.id, loadTimeout, true);
         const t = await chrome.tabs.get(tab.id);
         return { success: true, tab: tabInfo(t), groupId: t.groupId, windowId: t.windowId, group };
       }
@@ -361,7 +359,8 @@ export async function execute(cmd) {
       case "back":
       case "forward":
       case "reload": {
-        const pending = p.wait === "none" ? null : waitForTabLoad(tabId);
+        const loadTimeout = p.deadlineMs ? Math.max(100, p.deadlineMs - Date.now()) : 15000;
+        const pending = p.wait === "none" ? null : waitForTabLoad(tabId, loadTimeout);
         try {
           if (action === "reload") {
             await chrome.tabs.reload(tabId);
@@ -384,7 +383,13 @@ export async function execute(cmd) {
         } catch (e) {
           return fail("no_history", e.message);
         }
-        if (pending) await pending;
+        if (pending) {
+          const ok = await pending;
+          if (!ok) {
+            const t = await chrome.tabs.get(tabId);
+            return fail("nav_timeout", `${action} timed out waiting for page load`, { url: t.url, tab: tabInfo(t) });
+          }
+        }
         const t = await chrome.tabs.get(tabId);
         return { success: true, url: t.url, title: t.title, tab: tabInfo(t) };
       }
@@ -553,7 +558,8 @@ export async function execute(cmd) {
 
       case "wait_for":
       case "wait": {
-        const timeout = Number(p.timeout || 5000);
+        let timeout = Number(p.timeout || 5000);
+        if (p.deadlineMs) timeout = Math.min(timeout, Math.max(0, p.deadlineMs - Date.now()));
         const start = Date.now();
         const waited = () => Date.now() - start;
         if (p.idle) {
@@ -620,11 +626,13 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { typedSoFar: 0, remaining: text } });
         }
         let mode;
+        let pt;
         let frameId;
         if (target || hasCoords(p)) {
           const loc = await locate(tabId, p, "type");
           if (!loc.ok) return loc.result;
-          mode = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          pt = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          mode = loc.info.local || pt;
           frameId = frameOfRef(p.ref || p.target || p.selector);
         } else {
           mode = { active: true };
@@ -634,8 +642,8 @@ export async function execute(cmd) {
         const hasDbg = await attach(tabId);
         try {
           if (hasDbg && (target || hasCoords(p))) {
-            await nativeClick(tabId, mode.x, mode.y, "left", 1);
-            showCursor(tabId, mode.x, mode.y, true, p);
+            await nativeClick(tabId, pt.x, pt.y, "left", 1);
+            showCursor(tabId, pt.x, pt.y, true, p);
           }
           const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : null;
@@ -696,14 +704,16 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { written: text } });
         }
         let mode = null;
+        let pt = null;
         let frameId = frameOfRef(p.ref || p.target || p.selector);
         let targetInfo = {};
         if (hasCoords(p) && !target) {
-          mode = { x: Number(p.x), y: Number(p.y) };
+          mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
           const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
-          mode = { x: r.x, y: r.y };
+          pt = { x: r.x, y: r.y };
+          mode = r.local || pt;
           targetInfo = r;
         } else {
           mode = { active: true };
@@ -720,12 +730,12 @@ export async function execute(cmd) {
           let native = false;
           if (hasDbg && hasPoint) {
             try {
-              await nativeClick(tabId, mode.x, mode.y, "left", 1);
-              showCursor(tabId, mode.x, mode.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear]);
+              await nativeClick(tabId, pt.x, pt.y, "left", 1);
+              showCursor(tabId, pt.x, pt.y, true, p);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text]);
+              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
