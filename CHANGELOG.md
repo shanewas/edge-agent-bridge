@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+- Extension attaches to tabs even when DevTools or another CDP client is
+  already attached, removing the premature `getTargets` shortcut. Failed
+  attaches report `native: false` with `debuggerError` instead of silent
+  synthetic event fallback, and commands map missing tabs to `tab_not_found`.
 - macOS: the daemon no longer blocks about 30 s in `socket.getfqdn()` before it
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
 
 ## 2.5.0
 
