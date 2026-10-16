@@ -6,6 +6,15 @@
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Targets that are CSS selectors resolve as selectors: an explicit
+  `selector` always goes to `querySelector` (never name matching, with
+  `bad_selector` for unparsable input), tag compounds like `h2.title` and
+  `input#email` try the selector before name matching, and a bare tag like
+  `main` tries it after, so a button named "Main" still wins.
 
 ## 2.5.0
 

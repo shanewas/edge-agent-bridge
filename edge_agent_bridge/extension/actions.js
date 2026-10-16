@@ -105,7 +105,7 @@ async function resolveTargetWithWait(tabId, target, timeoutMs = 5000, opts = {})
   if (typeof target === "object" && target !== null && target.x !== undefined && target.y !== undefined) {
     return { found: true, x: Number(target.x), y: Number(target.y) };
   }
-  const resolveOpts = { highlight: opts.highlight !== false };
+  const resolveOpts = { highlight: opts.highlight !== false, kind: opts.kind || "target" };
   const frameId = frameOfRef(target);
   if (frameId !== undefined) {
     const live = await probeSubframeIds(tabId);
@@ -134,7 +134,8 @@ async function locate(tabId, p, verb) {
   if (hasCoords(p)) return { ok: true, x: Number(p.x), y: Number(p.y), info: {} };
   const target = p.ref || p.target || p.selector || p.text;
   if (!target) return { ok: false, result: fail("bad_params", `${verb} requires ref, target, selector, text, or coordinates`) };
-  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
+  const kind = p.selector && !p.ref && !p.target ? "selector" : "target";
+  const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight, kind });
   if (!r || !r.found) return { ok: false, result: fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`), target };
   if (frameOfRef(target) !== undefined && r.rendered !== false) {
     // pageResolve ran inside the subframe, blind to main-frame overlays. The top
@@ -620,11 +621,13 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { typedSoFar: 0, remaining: text } });
         }
         let mode;
+        let pt;
         let frameId;
         if (target || hasCoords(p)) {
           const loc = await locate(tabId, p, "type");
           if (!loc.ok) return loc.result;
-          mode = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          pt = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          mode = loc.info.local || pt;
           frameId = frameOfRef(p.ref || p.target || p.selector);
         } else {
           mode = { active: true };
@@ -634,8 +637,8 @@ export async function execute(cmd) {
         const hasDbg = await attach(tabId);
         try {
           if (hasDbg && (target || hasCoords(p))) {
-            await nativeClick(tabId, mode.x, mode.y, "left", 1);
-            showCursor(tabId, mode.x, mode.y, true, p);
+            await nativeClick(tabId, pt.x, pt.y, "left", 1);
+            showCursor(tabId, pt.x, pt.y, true, p);
           }
           const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : null;
@@ -696,14 +699,16 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { written: text } });
         }
         let mode = null;
+        let pt = null;
         let frameId = frameOfRef(p.ref || p.target || p.selector);
         let targetInfo = {};
         if (hasCoords(p) && !target) {
-          mode = { x: Number(p.x), y: Number(p.y) };
+          mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
           const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
-          mode = { x: r.x, y: r.y };
+          pt = { x: r.x, y: r.y };
+          mode = r.local || pt;
           targetInfo = r;
         } else {
           mode = { active: true };
@@ -720,12 +725,12 @@ export async function execute(cmd) {
           let native = false;
           if (hasDbg && hasPoint) {
             try {
-              await nativeClick(tabId, mode.x, mode.y, "left", 1);
-              showCursor(tabId, mode.x, mode.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear]);
+              await nativeClick(tabId, pt.x, pt.y, "left", 1);
+              showCursor(tabId, pt.x, pt.y, true, p);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text]);
+              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
