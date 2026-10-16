@@ -84,7 +84,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
   const cleanArgs = (args || []).map(a => (a === undefined ? null : a));
   const run = async () => {
     const results = await chrome.scripting.executeScript({ target, func, args: cleanArgs, world });
-    if (results && results[0]) return results[0].result;
+    if (results && results[0] && results[0].result !== undefined) return results[0].result;
     return fail("inject_failed", "Script injected but returned no result");
   };
   try {
@@ -93,6 +93,7 @@ export async function execInTab(tabId, func, args = [], world = "ISOLATED", fram
       await injectLib(tabId, frameId);
       result = await run();
     }
+    if (result === undefined) return fail("inject_failed", "Script injected but returned no result");
     return result;
   } catch (err) {
     return fail("inject_failed", err.message);
@@ -620,11 +621,13 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { typedSoFar: 0, remaining: text } });
         }
         let mode;
+        let pt;
         let frameId;
         if (target || hasCoords(p)) {
           const loc = await locate(tabId, p, "type");
           if (!loc.ok) return loc.result;
-          mode = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          pt = (hasCoords(p) && !target) ? { x: Number(p.x), y: Number(p.y) } : { x: loc.x, y: loc.y };
+          mode = loc.info.local || pt;
           frameId = frameOfRef(p.ref || p.target || p.selector);
         } else {
           mode = { active: true };
@@ -634,8 +637,8 @@ export async function execute(cmd) {
         const hasDbg = await attach(tabId);
         try {
           if (hasDbg && (target || hasCoords(p))) {
-            await nativeClick(tabId, mode.x, mode.y, "left", 1);
-            showCursor(tabId, mode.x, mode.y, true, p);
+            await nativeClick(tabId, pt.x, pt.y, "left", 1);
+            showCursor(tabId, pt.x, pt.y, true, p);
           }
           const before = await execInTab(tabId, page.pageReadback, [mode], "ISOLATED", frameId);
           const valueBefore = (before && before.success && before.verifiable) ? normalizeReadValue(before.value) : null;
@@ -696,14 +699,16 @@ export async function execute(cmd) {
           return fail("deadline_exceeded", "Write deadline passed before dispatch", { progress: { written: text } });
         }
         let mode = null;
+        let pt = null;
         let frameId = frameOfRef(p.ref || p.target || p.selector);
         let targetInfo = {};
         if (hasCoords(p) && !target) {
-          mode = { x: Number(p.x), y: Number(p.y) };
+          mode = pt = { x: Number(p.x), y: Number(p.y) };
         } else if (target) {
           const r = await resolveTargetWithWait(tabId, target, p.timeout || 5000, { highlight: p.highlight });
           if (!r || !r.found) return fail(r ? r.code : "target_not_found", r ? r.error : `Target not found: ${target}`);
-          mode = { x: r.x, y: r.y };
+          pt = { x: r.x, y: r.y };
+          mode = r.local || pt;
           targetInfo = r;
         } else {
           mode = { active: true };
@@ -720,12 +725,12 @@ export async function execute(cmd) {
           let native = false;
           if (hasDbg && hasPoint) {
             try {
-              await nativeClick(tabId, mode.x, mode.y, "left", 1);
-              showCursor(tabId, mode.x, mode.y, true, p);
-              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear]);
+              await nativeClick(tabId, pt.x, pt.y, "left", 1);
+              showCursor(tabId, pt.x, pt.y, true, p);
+              const prep = await execInTab(tabId, page.pageFillPrepare, [mode.x, mode.y, shouldClear], "ISOLATED", frameId);
               if (prep && prep.success === false) return prep;
               await cdpSend(tabId, "Input.insertText", { text });
-              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text]);
+              await execInTab(tabId, page.pageFillCommit, [mode.x, mode.y, text], "ISOLATED", frameId);
               native = true;
             } catch (e) {
               log(`Native fill failed (${e.message}), falling back to synthetic DOM`);
@@ -828,7 +833,9 @@ export async function execute(cmd) {
       case "check_radio":
       case "check":
       case "select_radio": {
-        return await execInTab(tabId, page.pageCheckRadio, [p.selector || p.target, p.text, p.value]);
+        const target = p.ref || p.target || p.selector || p.text;
+        const isExplicitSelector = Boolean(p.selector && !p.ref && !p.target);
+        return await execInTab(tabId, page.pageCheckRadio, [target, p.value, isExplicitSelector], "ISOLATED", frameOfRef(p.ref));
       }
 
       case "get_text":
