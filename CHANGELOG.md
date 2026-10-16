@@ -6,6 +6,14 @@
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- When the extension socket drops, in-flight commands fail at once with
+  `extension_offline` instead of waiting out their timeout; a pairing
+  rejection (close 4001) stops the worker's reconnect loop until a token
+  is saved or Reconnect is clicked, and the popup shows the pairing field.
 
 ## 2.5.0
 
