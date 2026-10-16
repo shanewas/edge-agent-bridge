@@ -21,6 +21,10 @@
 - Windows: the daemon no longer sets `SO_REUSEADDR`, so a second daemon on a busy
   port fails with `WinError 10048` and exits 1 instead of binding silently and
   overwriting `bridge.pid`.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
 
 ## 2.5.0
 
