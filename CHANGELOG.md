@@ -6,6 +6,13 @@
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Malformed `/exec` requests (non-ASCII token header, non-string `action`,
+  non-list batch `steps`) get a JSON 400/401 answer instead of a dropped
+  connection.
 
 ## 2.5.0
 
