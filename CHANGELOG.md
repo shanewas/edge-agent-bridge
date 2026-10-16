@@ -6,11 +6,19 @@
   listens, which made auto-start time out and every hermetic macOS CI leg fail.
 - Releases publish only after the full `ci` workflow passes, including the
   Windows E2E suite.
+- `fill` and `type` by ref work inside iframes not at the page origin: in-frame
+  hit-testing now uses frame-local coordinates instead of failing with
+  `focus_lost`. Corrects the 2.4.0 known-issue note:
+  `test_fill_ref_in_cross_origin_frame` was this bug, not a headless Edge flake.
+- Browser instance isolation: extension hello carries a persistent `instance` ID.
+  A different browser/profile attempting to connect while another is active is
+  closed with code 4002 ("another browser is connected") rather than displacing
+  the active browser, and `/status` and `doctor` report the rejected instance.
 
 ## 2.5.0
 
 - PATH-proof entry points: `py -m edge_agent_bridge` and `python -m edge_agent_bridge`
-  delegate directly to the CLI, allowing commands to run even when `edge-bridge`
+  delegate directly to the CLI so commands run even when `edge-bridge`
   is not recognized on PATH.
 - `edge-bridge doctor` adds `launcher`, `path`, and Windows `elevation` diagnostics:
   identifies missing scripts, broken PATH, stale installs, and elevated shells with
